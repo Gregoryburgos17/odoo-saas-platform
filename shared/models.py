@@ -5,6 +5,7 @@ Multi-tenant architecture with proper isolation and security
 """
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any
 import hashlib
@@ -12,8 +13,8 @@ import json
 import uuid
 
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Boolean, Text, JSON, 
-    ForeignKey, Decimal, BigInteger, Index, UniqueConstraint,
+    Column, String, Integer, DateTime, Boolean, Text, JSON,
+    ForeignKey, Numeric, BigInteger, Index, UniqueConstraint,
     CheckConstraint, event
 )
 from sqlalchemy.ext.declarative import declarative_base
