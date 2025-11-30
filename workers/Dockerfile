@@ -12,16 +12,16 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY requirements.txt .
+COPY workers/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared module from parent directory (required for database models)
-COPY ../shared/ /app/shared/
+# Copy shared module (required for database models)
+COPY shared/ /app/shared/
 
 # Copy application code
-COPY . /app/
+COPY workers/ /app/
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

@@ -60,8 +60,8 @@ services:
   # Admin Dashboard Service
   admin:
     build:
-      context: ./admin
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: admin/Dockerfile
       args:
         - BUILDKIT_INLINE_CACHE=1
     image: localhost/odoo-saas-admin:latest
@@ -108,8 +108,8 @@ services:
   # Customer Portal Service
   portal:
     build:
-      context: ./portal
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: portal/Dockerfile
       args:
         - BUILDKIT_INLINE_CACHE=1
     image: localhost/odoo-saas-portal:latest
@@ -153,8 +153,8 @@ services:
   # RQ Worker for background jobs
   worker:
     build:
-      context: ./workers
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: workers/Dockerfile
       args:
         - BUILDKIT_INLINE_CACHE=1
     image: localhost/odoo-saas-worker:latest
