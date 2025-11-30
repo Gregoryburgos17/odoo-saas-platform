@@ -343,7 +343,7 @@ class AuditLog(Base):
     # Change details
     old_values = Column(JSONB)
     new_values = Column(JSONB)
-    metadata = Column(JSONB, default=dict)
+    extra_metadata = Column(JSONB, default=dict)  # Renamed from 'metadata' (reserved word)
     
     # Immutability protection
     payload_hash = Column(String(64), nullable=False)  # SHA-256 of serialized data
