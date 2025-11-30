@@ -59,6 +59,9 @@ services:
 
   # Admin Dashboard Service
   admin:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
     image: localhost/odoo-saas-admin:latest
     container_name: odoo-saas-admin
     environment:
@@ -102,6 +105,9 @@ services:
 
   # Customer Portal Service
   portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
     image: localhost/odoo-saas-portal:latest
     container_name: odoo-saas-portal
     environment:
@@ -142,6 +148,9 @@ services:
 
   # RQ Worker for background jobs
   worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
     image: localhost/odoo-saas-worker:latest
     container_name: odoo-saas-worker
     environment:
