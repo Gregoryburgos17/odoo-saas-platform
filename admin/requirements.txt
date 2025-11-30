@@ -16,6 +16,9 @@ redis==5.0.1
 # WSGI Server
 gunicorn==21.2.0
 
+# Validation and Serialization
+marshmallow==3.20.1
+
 # Utilities
 python-dotenv==1.0.0
 Werkzeug==3.0.1

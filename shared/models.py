@@ -5,6 +5,7 @@ Multi-tenant architecture with proper isolation and security
 """
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any
 import hashlib
@@ -12,8 +13,8 @@ import json
 import uuid
 
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Boolean, Text, JSON, 
-    ForeignKey, Decimal, BigInteger, Index, UniqueConstraint,
+    Column, String, Integer, DateTime, Boolean, Text, JSON,
+    ForeignKey, Numeric, BigInteger, Index, UniqueConstraint,
     CheckConstraint, event
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -165,8 +166,8 @@ class Plan(Base):
     description = Column(Text)
     
     # Pricing
-    price_monthly = Column(Decimal(10, 2))
-    price_yearly = Column(Decimal(10, 2))
+    price_monthly = Column(Numeric(10, 2))
+    price_yearly = Column(Numeric(10, 2))
     currency = Column(String(3), default='USD', nullable=False)
     
     # Quotas and limits
@@ -342,7 +343,7 @@ class AuditLog(Base):
     # Change details
     old_values = Column(JSONB)
     new_values = Column(JSONB)
-    metadata = Column(JSONB, default=dict)
+    extra_metadata = Column(JSONB, default=dict)  # Renamed from 'metadata' (reserved word)
     
     # Immutability protection
     payload_hash = Column(String(64), nullable=False)  # SHA-256 of serialized data
@@ -445,7 +446,7 @@ class Subscription(Base):
     ended_at = Column(DateTime)
     
     # Billing
-    amount = Column(Decimal(10, 2))
+    amount = Column(Numeric(10, 2))
     currency = Column(String(3), default='USD')
     interval = Column(String(20))  # month, year
     
@@ -478,7 +479,7 @@ class PaymentEvent(Base):
     event_type = Column(String(50), nullable=False)
     
     # Payment details
-    amount = Column(Decimal(10, 2))
+    amount = Column(Numeric(10, 2))
     currency = Column(String(3))
     status = Column(String(20))
     
@@ -573,15 +574,59 @@ class SupportTicket(Base):
     )
 
 
+class BackupRecord(Base):
+    """
+    Backup records for database and filestore backups
+    Tracks S3-stored backups with metadata and integrity information
+    """
+    __tablename__ = 'backup_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Backup identification
+    tenant_id = Column(Integer, ForeignKey('tenants.id', ondelete='SET NULL'), nullable=True)
+    database_name = Column(String(100))
+    backup_type = Column(String(20), nullable=False)  # database, filestore, full
+
+    # S3 location
+    s3_bucket = Column(String(200), nullable=False)
+    s3_key = Column(String(500), nullable=False)
+
+    # Backup metadata
+    file_size = Column(BigInteger)  # Size in bytes
+    file_hash = Column(String(64))  # SHA-256 hash for integrity verification
+
+    # Status tracking
+    status = Column(String(20), default='in_progress')  # in_progress, completed, failed, deleted
+    error_message = Column(Text)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime)
+    deleted_at = Column(DateTime)
+
+    # Relationships
+    tenant = relationship("Tenant", foreign_keys=[tenant_id])
+
+    # Constraints
+    __table_args__ = (
+        Index('idx_backup_tenant_type', 'tenant_id', 'backup_type'),
+        Index('idx_backup_status_created', 'status', 'created_at'),
+        Index('idx_backup_s3_key', 's3_key'),
+    )
+
+
 # Event listeners for automatic timestamp updates
 @event.listens_for(Customer, 'before_update')
-@event.listens_for(Tenant, 'before_update') 
+@event.listens_for(Tenant, 'before_update')
 @event.listens_for(Plan, 'before_update')
 @event.listens_for(Subscription, 'before_update')
 @event.listens_for(SupportTicket, 'before_update')
+@event.listens_for(BackupRecord, 'before_update')
 def receive_before_update(mapper, connection, target):
     """Update timestamp on model changes"""
-    target.updated_at = datetime.utcnow()
+    if hasattr(target, 'updated_at'):
+        target.updated_at = datetime.utcnow()
 
 
 # Import os here to avoid circular imports at module level
