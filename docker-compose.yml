@@ -174,7 +174,7 @@ services:
     image: eoranged/rq-dashboard:latest
     container_name: odoo-saas-rq-dashboard
     environment:
-      - RQ_DASHBOARD_REDIS_URL=redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379/0
+      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/0
     ports:
       - "9181:9181"
     networks:
