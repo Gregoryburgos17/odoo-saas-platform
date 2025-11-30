@@ -166,8 +166,8 @@ class Plan(Base):
     description = Column(Text)
     
     # Pricing
-    price_monthly = Column(Decimal(10, 2))
-    price_yearly = Column(Decimal(10, 2))
+    price_monthly = Column(Numeric(10, 2))
+    price_yearly = Column(Numeric(10, 2))
     currency = Column(String(3), default='USD', nullable=False)
     
     # Quotas and limits
@@ -446,7 +446,7 @@ class Subscription(Base):
     ended_at = Column(DateTime)
     
     # Billing
-    amount = Column(Decimal(10, 2))
+    amount = Column(Numeric(10, 2))
     currency = Column(String(3), default='USD')
     interval = Column(String(20))  # month, year
     
@@ -479,7 +479,7 @@ class PaymentEvent(Base):
     event_type = Column(String(50), nullable=False)
     
     # Payment details
-    amount = Column(Decimal(10, 2))
+    amount = Column(Numeric(10, 2))
     currency = Column(String(3))
     status = Column(String(20))
     
