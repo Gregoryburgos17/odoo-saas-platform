@@ -24,7 +24,10 @@ load_dotenv()
 db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri_formatter=lambda app: app.config.get('RATELIMIT_STORAGE_URL')
+)
 
 def create_app(config_name=None):
     """Flask application factory for customer portal"""
