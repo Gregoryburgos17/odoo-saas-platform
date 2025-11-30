@@ -33,21 +33,21 @@ limiter = Limiter(
 def create_app(config_name=None):
     """Flask application factory"""
     app = Flask(__name__)
-    
+
     # Load configuration
     app.config.from_object(get_config_class(config_name))
-    
+
     # Handle proxy headers (for load balancers)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-    
+
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
 
     # Initialize rate limiter with Redis storage
-    limiter.init_app(app)
-    limiter.storage_uri = app.config.get('RATELIMIT_STORAGE_URL')
+    # IMPORTANT: storage_uri must be passed to init_app, not set afterwards
+    limiter.init_app(app, storage_uri=app.config.get('RATELIMIT_STORAGE_URL'))
     
     # Initialize CORS
     CORS(app, 
@@ -323,7 +323,8 @@ def register_blueprints(app):
     app.register_blueprint(plans_bp, url_prefix='/api/plans')
     app.register_blueprint(audit_bp, url_prefix='/api/audit')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
-    app.register_blueprint(health_bp, url_prefix='/health')
+    # Health and metrics endpoints (no prefix for compatibility with monitoring tools)
+    app.register_blueprint(health_bp)
     
     # Web UI blueprint
     app.register_blueprint(web_bp)

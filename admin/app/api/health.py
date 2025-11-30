@@ -19,7 +19,7 @@ from shared.models import Customer
 # Create blueprint
 health_bp = Blueprint('health', __name__)
 
-@health_bp.route('/', methods=['GET'])
+@health_bp.route('/health', methods=['GET'])
 def health_check():
     """Basic health check endpoint"""
     return jsonify({
@@ -29,7 +29,7 @@ def health_check():
         'version': '1.0.0'
     }), 200
 
-@health_bp.route('/ready', methods=['GET'])
+@health_bp.route('/health/ready', methods=['GET'])
 def readiness_check():
     """Readiness check - verifies all dependencies are available"""
     checks = {
@@ -73,20 +73,20 @@ def readiness_check():
         'checks': checks
     }), status_code
 
-@health_bp.route('/live', methods=['GET'])
+@health_bp.route('/health/live', methods=['GET'])
 def liveness_check():
     """Liveness check - basic application responsiveness"""
     try:
         # Perform minimal check
         current_time = datetime.utcnow()
-        
+
         return jsonify({
             'status': 'alive',
             'service': 'admin-dashboard',
             'timestamp': current_time.isoformat(),
             'uptime': current_time.isoformat()  # TODO: Track actual uptime
         }), 200
-        
+
     except Exception as e:
         current_app.logger.error(f"Liveness check failed: {e}")
         return jsonify({
@@ -130,7 +130,7 @@ def metrics():
             'details': str(e)
         }), 500
 
-@health_bp.route('/version', methods=['GET'])
+@health_bp.route('/health/version', methods=['GET'])
 def version_info():
     """Version and build information"""
     return jsonify({

@@ -33,12 +33,15 @@ RUN useradd -m -u 1000 appuser && \
 # Switch to non-root user
 USER appuser
 
+# Set Flask app location for CLI commands
+ENV FLASK_APP=admin.app
+
 # Expose port
 EXPOSE 5000 9090
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:5000/api/health || exit 1
+    CMD curl -f http://localhost:5000/health || exit 1
 
 # Run with gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "--chdir", "/app/admin", "app:create_app()"]

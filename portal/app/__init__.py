@@ -26,7 +26,7 @@ migrate = Migrate()
 jwt = JWTManager()
 limiter = Limiter(
     key_func=get_remote_address,
-    storage_uri_formatter=lambda app: app.config.get('RATELIMIT_STORAGE_URL')
+    default_limits=[]
 )
 
 def create_app(config_name=None):
@@ -43,7 +43,9 @@ def create_app(config_name=None):
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    limiter.init_app(app)
+    # Initialize rate limiter with Redis storage
+    # IMPORTANT: storage_uri must be passed to init_app, not set afterwards
+    limiter.init_app(app, storage_uri=app.config.get('RATELIMIT_STORAGE_URL'))
     
     # Initialize CORS
     CORS(app, 
@@ -288,7 +290,8 @@ def register_blueprints(app):
     app.register_blueprint(billing_bp, url_prefix='/api/billing')
     app.register_blueprint(support_bp, url_prefix='/api/support')
     app.register_blueprint(webhooks_bp, url_prefix='/webhooks')
-    app.register_blueprint(health_bp, url_prefix='/health')
+    # Health and metrics endpoints (no prefix for compatibility with monitoring tools)
+    app.register_blueprint(health_bp)
     
     # Web UI blueprint
     app.register_blueprint(web_bp)

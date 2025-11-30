@@ -62,6 +62,7 @@ services:
     image: localhost/odoo-saas-admin:latest
     container_name: odoo-saas-admin
     environment:
+      - FLASK_APP=admin.app
       - FLASK_ENV=development
       - FLASK_DEBUG=true
       - PG_HOST=postgres
@@ -104,6 +105,7 @@ services:
     image: localhost/odoo-saas-portal:latest
     container_name: odoo-saas-portal
     environment:
+      - FLASK_APP=portal.run:app
       - FLASK_ENV=development
       - FLASK_DEBUG=true
       - PG_HOST=postgres
