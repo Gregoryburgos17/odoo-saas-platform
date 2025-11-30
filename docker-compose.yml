@@ -59,9 +59,7 @@ services:
 
   # Admin Dashboard Service
   admin:
-    build:
-      context: .
-      dockerfile: admin/Containerfile
+    image: localhost/odoo-saas-admin:latest
     container_name: odoo-saas-admin
     environment:
       - FLASK_ENV=development
@@ -103,9 +101,7 @@ services:
 
   # Customer Portal Service
   portal:
-    build:
-      context: .
-      dockerfile: portal/Containerfile
+    image: localhost/odoo-saas-portal:latest
     container_name: odoo-saas-portal
     environment:
       - FLASK_ENV=development
@@ -144,9 +140,7 @@ services:
 
   # RQ Worker for background jobs
   worker:
-    build:
-      context: .
-      dockerfile: workers/Containerfile
+    image: localhost/odoo-saas-worker:latest
     container_name: odoo-saas-worker
     environment:
       - FLASK_ENV=development
