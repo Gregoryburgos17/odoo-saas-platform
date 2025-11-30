@@ -166,10 +166,12 @@ class WorkerManager:
     def stop_worker(self):
         """Stop the worker gracefully"""
         self.running = False
-        
+
         if self.worker:
             logger.info("Stopping worker...")
-            self.worker.request_stop()
+            # Send SIGTERM signal to request_stop
+            import signal as sig
+            self.worker.request_stop(sig.SIGTERM, None)
     
     def setup_signal_handlers(self):
         """Set up signal handlers for graceful shutdown"""
