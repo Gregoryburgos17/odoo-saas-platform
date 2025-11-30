@@ -14,53 +14,66 @@ import redis
 from rq import Worker, Queue, Connection
 from rq.job import Job
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from workers.jobs.tenant_jobs import (
-    provision_tenant_job,
-    delete_tenant_job,
-    install_module_job,
-    uninstall_module_job,
-    backup_tenant_job,
-    restore_tenant_job
-)
-
-from workers.jobs.backup_jobs import (
-    backup_database_to_s3_job,
-    restore_database_from_s3_job,
-    cleanup_old_backups_job,
-    verify_backup_integrity_job
-)
-
-from workers.jobs.billing_jobs import (
-    process_payment_webhook_job,
-    send_invoice_job,
-    process_subscription_change_job,
-    send_billing_notification_job
-)
-
-from workers.jobs.notification_jobs import (
-    send_email_job,
-    send_sms_job,
-    send_slack_notification_job,
-    send_welcome_email_job,
-    send_support_notification_job
-)
-
-from workers.jobs.monitoring_jobs import (
-    collect_tenant_metrics_job,
-    check_system_health_job,
-    cleanup_old_logs_job,
-    generate_usage_report_job
-)
-
-# Configure logging
+# Configure logging first
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Import available job modules
+try:
+    from jobs.tenant_jobs import (
+        provision_tenant_job,
+        delete_tenant_job,
+        install_module_job,
+        uninstall_module_job,
+        backup_tenant_job,
+        restore_tenant_job
+    )
+except ImportError as e:
+    logger.warning(f"Could not import tenant_jobs: {e}")
+    provision_tenant_job = None
+    delete_tenant_job = None
+    install_module_job = None
+    uninstall_module_job = None
+    backup_tenant_job = None
+    restore_tenant_job = None
+
+# Additional job modules can be imported here as they are implemented
+# For now, we'll comment out the modules that don't exist yet
+
+# from jobs.backup_jobs import (
+#     backup_database_to_s3_job,
+#     restore_database_from_s3_job,
+#     cleanup_old_backups_job,
+#     verify_backup_integrity_job
+# )
+#
+# from jobs.billing_jobs import (
+#     process_payment_webhook_job,
+#     send_invoice_job,
+#     process_subscription_change_job,
+#     send_billing_notification_job
+# )
+#
+# from jobs.notification_jobs import (
+#     send_email_job,
+#     send_sms_job,
+#     send_slack_notification_job,
+#     send_welcome_email_job,
+#     send_support_notification_job
+# )
+#
+# from jobs.monitoring_jobs import (
+#     collect_tenant_metrics_job,
+#     check_system_health_job,
+#     cleanup_old_logs_job,
+#     generate_usage_report_job
+# )
 
 # Configuration
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')

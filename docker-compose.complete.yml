@@ -157,8 +157,8 @@ services:
   # Background Workers
   worker:
     build:
-      context: ./workers
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: workers/Dockerfile
     container_name: odoo-saas-worker
     environment:
       - REDIS_HOST=redis
@@ -242,7 +242,7 @@ services:
       - ./monitoring/prometheus/alerts:/etc/prometheus/alerts:ro
       - prometheus_data:/prometheus
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9092:9090"
     networks:
       - monitoring
       - backend

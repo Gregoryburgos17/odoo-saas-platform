@@ -573,15 +573,59 @@ class SupportTicket(Base):
     )
 
 
+class BackupRecord(Base):
+    """
+    Backup records for database and filestore backups
+    Tracks S3-stored backups with metadata and integrity information
+    """
+    __tablename__ = 'backup_records'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Backup identification
+    tenant_id = Column(Integer, ForeignKey('tenants.id', ondelete='SET NULL'), nullable=True)
+    database_name = Column(String(100))
+    backup_type = Column(String(20), nullable=False)  # database, filestore, full
+
+    # S3 location
+    s3_bucket = Column(String(200), nullable=False)
+    s3_key = Column(String(500), nullable=False)
+
+    # Backup metadata
+    file_size = Column(BigInteger)  # Size in bytes
+    file_hash = Column(String(64))  # SHA-256 hash for integrity verification
+
+    # Status tracking
+    status = Column(String(20), default='in_progress')  # in_progress, completed, failed, deleted
+    error_message = Column(Text)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime)
+    deleted_at = Column(DateTime)
+
+    # Relationships
+    tenant = relationship("Tenant", foreign_keys=[tenant_id])
+
+    # Constraints
+    __table_args__ = (
+        Index('idx_backup_tenant_type', 'tenant_id', 'backup_type'),
+        Index('idx_backup_status_created', 'status', 'created_at'),
+        Index('idx_backup_s3_key', 's3_key'),
+    )
+
+
 # Event listeners for automatic timestamp updates
 @event.listens_for(Customer, 'before_update')
-@event.listens_for(Tenant, 'before_update') 
+@event.listens_for(Tenant, 'before_update')
 @event.listens_for(Plan, 'before_update')
 @event.listens_for(Subscription, 'before_update')
 @event.listens_for(SupportTicket, 'before_update')
+@event.listens_for(BackupRecord, 'before_update')
 def receive_before_update(mapper, connection, target):
     """Update timestamp on model changes"""
-    target.updated_at = datetime.utcnow()
+    if hasattr(target, 'updated_at'):
+        target.updated_at = datetime.utcnow()
 
 
 # Import os here to avoid circular imports at module level
