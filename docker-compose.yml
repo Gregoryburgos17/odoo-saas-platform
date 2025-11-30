@@ -192,7 +192,7 @@ services:
       - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
       - nginx_logs:/var/log/nginx
     ports:
-      - "8080:80"
+      - "8081:80"
       - "8443:443"
     networks:
       - odoo-saas-network
