@@ -27,7 +27,7 @@ migrate = Migrate()
 jwt = JWTManager()
 limiter = Limiter(
     key_func=get_remote_address,
-    storage_uri_formatter=lambda app: app.config.get('RATELIMIT_STORAGE_URL')
+    default_limits=[]
 )
 
 def create_app(config_name=None):
@@ -44,9 +44,10 @@ def create_app(config_name=None):
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    
-    # Initialize rate limiter
+
+    # Initialize rate limiter with Redis storage
     limiter.init_app(app)
+    limiter.storage_uri = app.config.get('RATELIMIT_STORAGE_URL')
     
     # Initialize CORS
     CORS(app, 
