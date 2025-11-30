@@ -12,16 +12,16 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY portal/requirements.txt .
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared module
-COPY shared/ /app/shared/
+# Copy shared module from parent directory
+COPY ../shared/ /app/shared/
 
 # Copy application code
-COPY portal/ /app/portal/
+COPY . /app/portal/
 
 # Create logs directory
 RUN mkdir -p /app/logs
