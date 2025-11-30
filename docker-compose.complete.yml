@@ -52,8 +52,8 @@ services:
   # Admin Dashboard
   admin:
     build:
-      context: ./admin
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./admin/Dockerfile
     container_name: odoo-saas-admin
     environment:
       - FLASK_ENV=production
@@ -83,8 +83,8 @@ services:
   # Customer Portal
   portal:
     build:
-      context: ./portal
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./portal/Dockerfile
     container_name: odoo-saas-portal
     environment:
       - FLASK_ENV=production
@@ -181,8 +181,8 @@ services:
   # Backup Service
   backup-service:
     build:
-      context: ./backup-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./backup-service/Dockerfile
     container_name: odoo-saas-backup
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -276,12 +276,12 @@ services:
     command:
       - '--config.file=/etc/alertmanager/config.yml'
       - '--storage.path=/alertmanager'
-      - '--web.external-url=http://localhost:9093'
+      - '--web.external-url=http://localhost:9094'
     volumes:
       - ./monitoring/alertmanager/config.yml:/etc/alertmanager/config.yml:ro
       - alertmanager_data:/alertmanager
     ports:
-      - "127.0.0.1:9093:9093"
+      - "127.0.0.1:9094:9093"  # Changed to 9094 to avoid conflict
     networks:
       - monitoring
     restart: unless-stopped
@@ -346,7 +346,7 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8080"  # Changed to 8081 to avoid conflict with odoo-service
     networks:
       - monitoring
     restart: unless-stopped
