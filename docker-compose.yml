@@ -62,7 +62,6 @@ services:
     build:
       context: .
       dockerfile: admin/Dockerfile
-      target: development
     container_name: odoo-saas-admin
     environment:
       - FLASK_ENV=development
@@ -107,7 +106,6 @@ services:
     build:
       context: .
       dockerfile: portal/Dockerfile
-      target: development
     container_name: odoo-saas-portal
     environment:
       - FLASK_ENV=development
@@ -142,14 +140,13 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
-    command: python portal/app.py
+    command: python portal/run.py
 
   # RQ Worker for background jobs
   worker:
     build:
       context: .
-      dockerfile: worker/Dockerfile
-      target: development
+      dockerfile: workers/Dockerfile
     container_name: odoo-saas-worker
     environment:
       - FLASK_ENV=development
@@ -165,7 +162,7 @@ services:
       - LOG_LEVEL=DEBUG
       - RQ_WORKERS=${RQ_WORKERS:-2}
     volumes:
-      - ./worker:/app/worker
+      - ./workers:/app/workers
       - ./shared:/app/shared
       - ./.env:/app/.env
     networks:
@@ -176,7 +173,7 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    command: python worker/main.py
+    command: python -m app.worker
 
   # RQ Dashboard for monitoring job queues
   rq-dashboard:
