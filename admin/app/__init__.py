@@ -46,8 +46,7 @@ def create_app(config_name=None):
     jwt.init_app(app)
 
     # Initialize rate limiter with Redis storage
-    # TEMPORALLY DISABLED: Flask-Limiter 3.5.0 configuration needs investigation
-    # limiter.init_app(app, storage_options={"url": app.config.get('RATELIMIT_STORAGE_URL')})
+    limiter.init_app(app, storage_uri=app.config.get('RATELIMIT_STORAGE_URL'))
     
     # Initialize CORS
     CORS(app, 
