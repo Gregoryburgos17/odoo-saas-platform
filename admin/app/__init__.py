@@ -46,7 +46,7 @@ def create_app(config_name=None):
     jwt.init_app(app)
 
     # Initialize rate limiter with Redis storage
-    limiter.init_app(app, storage_uri=app.config.get('RATELIMIT_STORAGE_URL'))
+    limiter.init_app(app)
     
     # Initialize CORS
     CORS(app, 
