@@ -84,9 +84,7 @@ services:
 
   # Admin Dashboard - Platform operator interface
   admin:
-    build:
-      context: .
-      dockerfile: admin/Dockerfile
+    image: localhost/odoo-saas-admin:latest
     container_name: odoo-saas-admin
     hostname: admin
     environment:
@@ -142,9 +140,7 @@ services:
 
   # Customer Portal - Self-service interface for customers
   portal:
-    build:
-      context: .
-      dockerfile: portal/Dockerfile
+    image: localhost/odoo-saas-portal:latest
     container_name: odoo-saas-portal
     hostname: portal
     environment:
@@ -207,9 +203,7 @@ services:
 
   # Background Worker - Async job processing
   worker:
-    build:
-      context: .
-      dockerfile: workers/Dockerfile
+    image: localhost/odoo-saas-worker:latest
     container_name: odoo-saas-worker
     hostname: worker
     environment:
