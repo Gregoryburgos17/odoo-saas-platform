@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mi SaaS Express - Portal de Creación</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 20px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.1rem;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .form-control:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        #result {
+            display: none;
+        }
+        .success-box {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .error-box {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .tenant-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .spinner-border {
+            display: none;
+        }
+        .loading .spinner-border {
+            display: inline-block;
+        }
+        .loading .btn-text {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header text-center">
+                        <h2 class="mb-0">🚀 Mi SaaS Express</h2>
+                        <p class="mb-0 mt-2 opacity-75">Crea tu instancia Odoo en segundos</p>
+                    </div>
+                    <div class="card-body p-4">
+                        <!-- Formulario de creación -->
+                        <form id="createForm">
+                            <div class="mb-3">
+                                <label for="tenantName" class="form-label fw-bold">Nombre de tu empresa</label>
+                                <input type="text"
+                                       class="form-control form-control-lg"
+                                       id="tenantName"
+                                       placeholder="mi-empresa"
+                                       pattern="[a-zA-Z0-9\-]+"
+                                       required>
+                                <div class="form-text">Solo letras, números y guiones. Sin espacios.</div>
+                            </div>
+                            <div class="mb-4">
+                                <label for="adminEmail" class="form-label fw-bold">Email del administrador</label>
+                                <input type="email"
+                                       class="form-control form-control-lg"
+                                       id="adminEmail"
+                                       placeholder="admin@miempresa.com">
+                                <div class="form-text">Opcional. Se usará para el login.</div>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100 btn-lg" id="submitBtn">
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                <span class="btn-text">✨ Crear Mi Odoo</span>
+                            </button>
+                        </form>
+
+                        <!-- Resultado -->
+                        <div id="result" class="mt-4"></div>
+
+                        <!-- Lista de tenants existentes -->
+                        <hr class="my-4">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="mb-0">📋 Tenants Existentes</h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadDatabases()">
+                                🔄 Actualizar
+                            </button>
+                        </div>
+                        <div id="tenantList" class="tenant-list">
+                            <p class="text-muted">Cargando...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="text-center text-white mt-3 opacity-75">
+                    Odoo disponible en: <code class="bg-dark px-2 py-1 rounded">http://localhost:{{ odoo_port }}</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ODOO_PORT = '{{ odoo_port }}';
+
+        // Cargar lista de bases de datos al iniciar
+        document.addEventListener('DOMContentLoaded', loadDatabases);
+
+        // Manejar envío del formulario
+        document.getElementById('createForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submitBtn');
+            const resultDiv = document.getElementById('result');
+            const tenantName = document.getElementById('tenantName').value.trim().toLowerCase();
+            const adminEmail = document.getElementById('adminEmail').value.trim();
+
+            // Mostrar loading
+            submitBtn.classList.add('loading');
+            submitBtn.disabled = true;
+            resultDiv.style.display = 'none';
+
+            try {
+                const response = await fetch('/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tenant_name: tenantName,
+                        admin_email: adminEmail || `admin@${tenantName}.local`
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <div class="success-box">
+                            <h5 class="text-success">✅ ¡Creado exitosamente!</h5>
+                            <p class="mb-2"><strong>Tu Odoo está listo:</strong></p>
+                            <a href="${data.url}" target="_blank" class="btn btn-success btn-sm mb-3">
+                                🚀 Abrir ${tenantName}
+                            </a>
+                            <div class="bg-white p-3 rounded mt-2">
+                                <p class="mb-1"><strong>URL:</strong> <code>${data.url}</code></p>
+                                <p class="mb-1"><strong>Email:</strong> <code>${data.credentials.email}</code></p>
+                                <p class="mb-0"><strong>Contraseña:</strong> <code>${data.credentials.password}</code></p>
+                            </div>
+                        </div>
+                    `;
+                    // Recargar lista
+                    loadDatabases();
+                    // Limpiar formulario
+                    document.getElementById('createForm').reset();
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error-box">
+                            <h5 class="text-danger">❌ Error</h5>
+                            <p class="mb-0">${data.error}</p>
+                        </div>
+                    `;
+                }
+
+                resultDiv.style.display = 'block';
+
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error-box">
+                        <h5 class="text-danger">❌ Error de conexión</h5>
+                        <p class="mb-0">${error.message}</p>
+                    </div>
+                `;
+                resultDiv.style.display = 'block';
+            } finally {
+                submitBtn.classList.remove('loading');
+                submitBtn.disabled = false;
+            }
+        });
+
+        // Función para cargar lista de bases de datos
+        async function loadDatabases() {
+            const listDiv = document.getElementById('tenantList');
+
+            try {
+                const response = await fetch('/list');
+                const data = await response.json();
+
+                if (data.success && data.databases.length > 0) {
+                    // Filtrar bases de datos del sistema
+                    const tenants = data.databases.filter(db =>
+                        !['postgres', 'template0', 'template1'].includes(db)
+                    );
+
+                    if (tenants.length > 0) {
+                        listDiv.innerHTML = tenants.map(db => `
+                            <div class="d-flex justify-content-between align-items-center p-2 border-bottom">
+                                <span>📦 ${db}</span>
+                                <a href="http://localhost:${ODOO_PORT}/web?db=${db}"
+                                   target="_blank"
+                                   class="btn btn-sm btn-outline-primary">
+                                    Abrir →
+                                </a>
+                            </div>
+                        `).join('');
+                    } else {
+                        listDiv.innerHTML = '<p class="text-muted mb-0">No hay tenants creados aún.</p>';
+                    }
+                } else if (data.success) {
+                    listDiv.innerHTML = '<p class="text-muted mb-0">No hay tenants creados aún.</p>';
+                } else {
+                    listDiv.innerHTML = `<p class="text-danger mb-0">Error: ${data.error}</p>`;
+                }
+            } catch (error) {
+                listDiv.innerHTML = `<p class="text-danger mb-0">Error de conexión: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

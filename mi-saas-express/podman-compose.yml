@@ -1,0 +1,105 @@
+# ============================================
+# MI-SAAS-EXPRESS - Podman Compose
+# Plataforma Odoo SaaS Minimalista
+# ============================================
+
+version: "3.8"
+
+services:
+  # ========================================
+  # 1. BASE DE DATOS POSTGRESQL
+  # ========================================
+  db:
+    image: docker.io/postgres:15-alpine
+    container_name: saas-postgres
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - saas-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ========================================
+  # 2. MOTOR ODOO (MULTI-TENANT)
+  # ========================================
+  odoo:
+    image: docker.io/odoo:17.0
+    container_name: saas-odoo
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      PORT: 5432
+      USER: odoo
+      PASSWORD: ${POSTGRES_PASSWORD}
+    # LA MAGIA: --database=False permite acceder a cualquier DB
+    # --db-filter filtra por nombre si se pasa en la URL
+    command: >
+      odoo
+      --database=False
+      --db_host=db
+      --db_port=5432
+      --db_user=odoo
+      --db_password=${POSTGRES_PASSWORD}
+      --admin-passwd=${ODOO_MASTER_PASSWORD}
+      --without-demo=all
+    ports:
+      - "${ODOO_PORT}:8069"
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - odoo-addons:/mnt/extra-addons
+    networks:
+      - saas-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8069/web/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ========================================
+  # 3. PORTAL DE CREACIÓN (FLASK)
+  # ========================================
+  portal:
+    build:
+      context: ./portal
+      dockerfile: Dockerfile
+    container_name: saas-portal
+    depends_on:
+      odoo:
+        condition: service_healthy
+    environment:
+      ODOO_URL: http://odoo:8069
+      ODOO_MASTER_PASSWORD: ${ODOO_MASTER_PASSWORD}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
+      ODOO_EXTERNAL_PORT: ${ODOO_PORT}
+    ports:
+      - "${PORTAL_PORT}:5000"
+    volumes:
+      - ./portal:/app:ro
+      - ./provisioner:/app/provisioner:ro
+    networks:
+      - saas-network
+    restart: unless-stopped
+
+# ========================================
+# REDES Y VOLÚMENES
+# ========================================
+networks:
+  saas-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  odoo-data:
+  odoo-addons:
