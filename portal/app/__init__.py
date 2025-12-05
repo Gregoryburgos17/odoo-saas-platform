@@ -15,16 +15,25 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
+import redis
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Initialize extensions (reuse from admin app)
+# Initialize extensions
 db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
-limiter = Limiter(key_func=get_remote_address)
+
+# Initialize limiter - will be configured with proper storage during app init
+# Using memory:// as default fallback if Redis is unavailable
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200 per day", "60 per hour"],
+    storage_uri="memory://",
+    strategy="fixed-window"
+)
 
 def create_app(config_name=None):
     """Flask application factory for customer portal"""
@@ -89,10 +98,16 @@ def get_config_class(config_name=None):
         JWT_REFRESH_TOKEN_EXPIRES = timedelta(seconds=int(os.getenv('JWT_REFRESH_TOKEN_EXPIRES', 604800)))
         JWT_ALGORITHM = 'HS256'
         
-        # Redis
+        # Redis for caching and rate limiting
         REDIS_URL = get_redis_url()
-        RATELIMIT_STORAGE_URL = get_redis_url()
+
+        # Rate limiting - use memory fallback if Redis unavailable
+        # Flask-Limiter 3.5.0 compatible configuration
+        RATELIMIT_STORAGE_URI = get_rate_limit_storage_url()
+        RATELIMIT_STORAGE_OPTIONS = {"socket_connect_timeout": 5}
         RATELIMIT_DEFAULT = os.getenv('RATE_LIMIT_PER_MINUTE', '60/minute')
+        RATELIMIT_STRATEGY = "fixed-window"
+        RATELIMIT_KEY_PREFIX = "portal_rl:"
         
         # CORS
         CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
@@ -159,10 +174,29 @@ def get_redis_url():
     port = os.getenv('REDIS_PORT', '6379')
     password = os.getenv('REDIS_PASSWORD', '')
     db = os.getenv('REDIS_DB', '0')
-    
+
     if password:
         return f"redis://:{password}@{host}:{port}/{db}"
     return f"redis://{host}:{port}/{db}"
+
+def get_rate_limit_storage_url():
+    """
+    Get rate limit storage URL with Redis availability check.
+    Falls back to memory storage if Redis is unavailable.
+    """
+    redis_url = get_redis_url()
+
+    # Try to connect to Redis
+    try:
+        r = redis.from_url(redis_url, socket_connect_timeout=2)
+        r.ping()
+        logging.getLogger(__name__).info("Using Redis for rate limiting")
+        return redis_url
+    except (redis.ConnectionError, redis.TimeoutError, Exception) as e:
+        logging.getLogger(__name__).warning(
+            f"Redis unavailable for rate limiting, using memory storage: {e}"
+        )
+        return "memory://"
 
 def configure_logging(app):
     """Configure application logging"""

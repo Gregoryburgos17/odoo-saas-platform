@@ -21,12 +21,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Add project root to path for proper imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-# Import available job modules
+# Import available job modules with proper error handling
 try:
-    from jobs.tenant_jobs import (
+    from workers.jobs.tenant_jobs import (
         provision_tenant_job,
         delete_tenant_job,
         install_module_job,
@@ -34,8 +36,10 @@ try:
         backup_tenant_job,
         restore_tenant_job
     )
+    logger.info("Successfully imported tenant_jobs module")
 except ImportError as e:
     logger.warning(f"Could not import tenant_jobs: {e}")
+    # Define fallback functions
     provision_tenant_job = None
     delete_tenant_job = None
     install_module_job = None
@@ -169,9 +173,14 @@ class WorkerManager:
 
         if self.worker:
             logger.info("Stopping worker...")
-            # Send SIGTERM signal to request_stop
-            import signal as sig
-            self.worker.request_stop(sig.SIGTERM, None)
+            # Request worker to stop - compatible with RQ 1.15+
+            try:
+                # Newer versions of RQ don't accept arguments
+                self.worker.request_stop()
+            except TypeError:
+                # Fallback for older versions
+                import signal as sig
+                self.worker.request_stop(sig.SIGTERM, None)
     
     def setup_signal_handlers(self):
         """Set up signal handlers for graceful shutdown"""

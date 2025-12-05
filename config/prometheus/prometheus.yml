@@ -28,10 +28,10 @@ scrape_configs:
     metrics_path: '/metrics'
     scrape_interval: 30s
 
-  # Customer Portal
+  # Customer Portal (port 5000 internal, 5001 external)
   - job_name: 'customer-portal'
     static_configs:
-      - targets: ['portal:5001']
+      - targets: ['portal:5000']
     metrics_path: '/metrics'
     scrape_interval: 30s
 

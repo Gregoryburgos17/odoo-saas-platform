@@ -1,0 +1,454 @@
+# =============================================================================
+# Odoo SaaS Platform - Podman/Docker Compose (Windows Compatible)
+# =============================================================================
+# This file is optimized for Podman Desktop on Windows
+# All services build from source - no pre-built images required
+#
+# USAGE:
+#   podman-compose -f docker-compose.podman.yml up -d --build
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # INFRASTRUCTURE SERVICES
+  # ===========================================================================
+
+  # PostgreSQL Database - Primary data store for all services
+  postgres:
+    image: docker.io/postgres:15-alpine
+    container_name: odoo-saas-postgres
+    hostname: postgres
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-odoo_saas_platform}
+      POSTGRES_USER: ${PG_USER:-odoo}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-odoo_password}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+      # Performance tuning
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init-db.sql:ro
+      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - odoo-saas-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-odoo} -d ${PG_DATABASE:-odoo_saas_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Redis - Caching, sessions, and job queues
+  redis:
+    image: docker.io/redis:7-alpine
+    container_name: odoo-saas-redis
+    hostname: redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
+      --timeout 0
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - odoo-saas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ===========================================================================
+  # APPLICATION SERVICES
+  # ===========================================================================
+
+  # Admin Dashboard - Platform operator interface
+  admin:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    container_name: odoo-saas-admin
+    hostname: admin
+    environment:
+      # Flask Configuration
+      - FLASK_ENV=${FLASK_ENV:-development}
+      - FLASK_DEBUG=${FLASK_DEBUG:-false}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production-32chars}
+      # Database
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_password}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      - PG_POOL_SIZE=10
+      # Redis - Using memory storage for rate limiting to avoid Redis dependency issues
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=0
+      # JWT
+      - JWT_ACCESS_TOKEN_EXPIRES=${JWT_ACCESS_TOKEN_EXPIRES:-3600}
+      - JWT_REFRESH_TOKEN_EXPIRES=${JWT_REFRESH_TOKEN_EXPIRES:-604800}
+      # CORS
+      - CORS_ALLOWED_ORIGINS=http://localhost:5000,http://localhost:5001,http://localhost:8081,http://localhost:3000
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Service identification
+      - SERVICE_NAME=admin-dashboard
+    volumes:
+      - ./admin:/app/admin:ro
+      - ./shared:/app/shared:ro
+      - ./alembic:/app/alembic:ro
+    ports:
+      - "5000:5000"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Customer Portal - Self-service interface for customers
+  portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    container_name: odoo-saas-portal
+    hostname: portal
+    environment:
+      # Flask Configuration
+      - FLASK_ENV=${FLASK_ENV:-development}
+      - FLASK_DEBUG=${FLASK_DEBUG:-false}
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production-32chars}
+      # Database
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_password}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      - PG_POOL_SIZE=10
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=0
+      # JWT
+      - JWT_ACCESS_TOKEN_EXPIRES=${JWT_ACCESS_TOKEN_EXPIRES:-3600}
+      - JWT_REFRESH_TOKEN_EXPIRES=${JWT_REFRESH_TOKEN_EXPIRES:-604800}
+      # CORS
+      - CORS_ALLOWED_ORIGINS=http://localhost:5000,http://localhost:5001,http://localhost:8081,http://localhost:3000
+      # Billing (Optional - leave empty for demo)
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_SIGNING_SECRET=${STRIPE_SIGNING_SECRET:-}
+      # Email (Optional)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVICE_NAME=customer-portal
+    volumes:
+      - ./portal:/app/portal:ro
+      - ./shared:/app/shared:ro
+    ports:
+      - "5001:5000"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Background Worker - Async job processing
+  worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    container_name: odoo-saas-worker
+    hostname: worker
+    environment:
+      # Database
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_password}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=0
+      - REDIS_WORKER_DB=3
+      # Worker Configuration
+      - WORKER_NAME=worker-main
+      - WORKER_QUEUES=high,default,low
+      - RQ_WORKERS=${RQ_WORKERS:-2}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SERVICE_NAME=background-worker
+    volumes:
+      - ./workers:/app/workers:ro
+      - ./shared:/app/shared:ro
+    networks:
+      - odoo-saas-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ===========================================================================
+  # MONITORING SERVICES
+  # ===========================================================================
+
+  # RQ Dashboard - Job queue monitoring UI
+  rq-dashboard:
+    image: docker.io/eoranged/rq-dashboard:latest
+    container_name: odoo-saas-rq-dashboard
+    hostname: rq-dashboard
+    environment:
+      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/3
+    ports:
+      - "9181:9181"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Prometheus - Metrics collection
+  prometheus:
+    image: docker.io/prom/prometheus:v2.47.0
+    container_name: odoo-saas-prometheus
+    hostname: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - odoo-saas-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Grafana - Metrics visualization
+  grafana:
+    image: docker.io/grafana/grafana:10.1.0
+    container_name: odoo-saas-grafana
+    hostname: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # AlertManager - Alert handling and routing
+  alertmanager:
+    image: docker.io/prom/alertmanager:v0.26.0
+    container_name: odoo-saas-alertmanager
+    hostname: alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    volumes:
+      - ./config/alertmanager/config.yml:/etc/alertmanager/config.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - odoo-saas-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # Nginx - Reverse proxy and load balancer
+  nginx:
+    image: docker.io/nginx:1.25-alpine
+    container_name: odoo-saas-nginx
+    hostname: nginx
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_logs:/var/log/nginx
+    ports:
+      - "8081:80"
+      - "8443:443"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      admin:
+        condition: service_healthy
+      portal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ===========================================================================
+  # DEVELOPMENT TOOLS (Optional)
+  # ===========================================================================
+
+  # Adminer - Database management UI
+  adminer:
+    image: docker.io/adminer:4.8.1
+    container_name: odoo-saas-adminer
+    hostname: adminer
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=dracula
+    ports:
+      - "8085:8080"
+    networks:
+      - odoo-saas-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["dev"]
+
+  # MailHog - Email testing (captures all outgoing emails)
+  mailhog:
+    image: docker.io/mailhog/mailhog:v1.0.1
+    container_name: odoo-saas-mailhog
+    hostname: mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    networks:
+      - odoo-saas-network
+    restart: unless-stopped
+    profiles: ["dev"]
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: odoo-saas-postgres-data
+  redis_data:
+    driver: local
+    name: odoo-saas-redis-data
+  prometheus_data:
+    driver: local
+    name: odoo-saas-prometheus-data
+  grafana_data:
+    driver: local
+    name: odoo-saas-grafana-data
+  alertmanager_data:
+    driver: local
+    name: odoo-saas-alertmanager-data
+  nginx_logs:
+    driver: local
+    name: odoo-saas-nginx-logs
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  odoo-saas-network:
+    driver: bridge
+    name: odoo-saas-network
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
