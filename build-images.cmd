@@ -11,7 +11,8 @@ echo Construyendo imagenes con Podman
 echo ========================================
 echo.
 
-cd /d D:\odoo-saas-platform
+REM Cambiar al directorio del script (raíz del proyecto)
+cd /d "%~dp0"
 
 echo [1/3] Construyendo imagen Admin...
 podman build -t localhost/odoo-saas-admin:latest -f admin/Dockerfile .
