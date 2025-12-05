@@ -21,12 +21,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize extensions (reuse from admin app)
+# Initialize extensions
 db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
-
-# Note: limiter will be initialized in create_app() after we have the storage_uri
-limiter = None
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[]
+)
 
 def create_app(config_name=None):
     """Flask application factory for customer portal"""
@@ -44,13 +46,6 @@ def create_app(config_name=None):
     jwt.init_app(app)
 
     # Initialize rate limiter with Redis storage
-    # For Flask-Limiter 3.x, storage_uri must be passed to the constructor
-    global limiter
-    limiter = Limiter(
-        key_func=get_remote_address,
-        default_limits=[],
-        storage_uri=app.config.get('RATELIMIT_STORAGE_URL')
-    )
     limiter.init_app(app)
     
     # Initialize CORS
