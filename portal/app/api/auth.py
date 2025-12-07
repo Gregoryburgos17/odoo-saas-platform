@@ -1,287 +1,316 @@
-#!/usr/bin/env python3
 """
-Customer Portal Authentication API
-Handles customer registration, login, and account management
+Customer Authentication API
 """
-
-import os
-import sys
+import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import (
-    create_access_token, create_refresh_token, jwt_required,
-    get_jwt_identity, get_current_user
+    create_access_token, create_refresh_token,
+    jwt_required, get_jwt_identity, current_user
 )
-from marshmallow import Schema, fields, validate, ValidationError
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+from shared.database import session_scope, get_session
+from shared.models import Customer, AuditLog, AuditAction, CustomerRole
 
-from shared.models import Customer, CustomerRole, AuditAction
-from portal.app import db, limiter
+logger = logging.getLogger(__name__)
 
-# Create blueprint
 auth_bp = Blueprint('auth', __name__)
 
-# Validation schemas
-class RegisterSchema(Schema):
-    email = fields.Email(required=True, validate=validate.Length(max=255))
-    password = fields.Str(required=True, validate=validate.Length(min=8))
-    first_name = fields.Str(required=True, validate=validate.Length(max=100))
-    last_name = fields.Str(required=True, validate=validate.Length(max=100))
-    company = fields.Str(validate=validate.Length(max=200))
-    phone = fields.Str(validate=validate.Length(max=20))
-
-class LoginSchema(Schema):
-    email = fields.Email(required=True)
-    password = fields.Str(required=True)
-    remember_me = fields.Bool(missing=False)
-
-class UpdateProfileSchema(Schema):
-    first_name = fields.Str(validate=validate.Length(max=100))
-    last_name = fields.Str(validate=validate.Length(max=100))
-    company = fields.Str(validate=validate.Length(max=200))
-    phone = fields.Str(validate=validate.Length(max=20))
-
-def rate_limit_key():
-    """Generate rate limiting key based on IP"""
-    return f"ip:{request.remote_addr}"
 
 @auth_bp.route('/register', methods=['POST'])
-@limiter.limit("5 per minute", key_func=rate_limit_key)
 def register():
-    """Customer registration"""
+    """Register a new customer"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    first_name = data.get('first_name', '').strip()
+    last_name = data.get('last_name', '').strip()
+    company = data.get('company', '').strip()
+
+    # Validation
+    if not email or '@' not in email:
+        return jsonify({'status': 'error', 'message': 'Valid email is required'}), 400
+
+    if not password or len(password) < 8:
+        return jsonify({'status': 'error', 'message': 'Password must be at least 8 characters'}), 400
+
     try:
-        schema = RegisterSchema()
-        data = schema.load(request.get_json() or {})
-    except ValidationError as err:
-        return jsonify({
-            'error': 'Validation Error',
-            'message': 'Invalid request data',
-            'details': err.messages
-        }), 400
+        with session_scope() as session:
+            # Check if email exists
+            existing = session.query(Customer).filter(Customer.email == email).first()
+            if existing:
+                return jsonify({'status': 'error', 'message': 'Email already registered'}), 409
 
-    # Check if customer already exists
-    existing_customer = Customer.query.filter_by(email=data['email'].lower()).first()
-    if existing_customer:
-        return jsonify({
-            'error': 'Customer Exists',
-            'message': 'An account with this email already exists'
-        }), 409
+            # Create customer
+            customer = Customer(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                company=company,
+                role=CustomerRole.OWNER.value,
+                is_active=True,
+                is_verified=False,
+            )
+            customer.set_password(password)
+            session.add(customer)
+            session.flush()
 
-    # Validate password strength
-    from admin.app.utils.auth import AuthenticationService
-    is_valid, password_errors = AuthenticationService.validate_password_strength(data['password'])
-    if not is_valid:
-        return jsonify({
-            'error': 'Weak Password',
-            'message': 'Password does not meet security requirements',
-            'details': password_errors
-        }), 400
+            # Audit log
+            audit_log = AuditLog(
+                actor_id=customer.id,
+                actor_email=email,
+                actor_role=customer.role,
+                action=AuditAction.CREATE.value,
+                resource_type='customer',
+                resource_id=str(customer.id),
+                ip_address=request.remote_addr,
+                user_agent=request.user_agent.string[:500] if request.user_agent else None,
+            )
+            session.add(audit_log)
 
-    # Check for compromised password
-    if AuthenticationService.is_password_compromised(data['password']):
-        return jsonify({
-            'error': 'Compromised Password',
-            'message': 'This password appears in known data breaches. Please choose a different password.'
-        }), 400
+            # Generate tokens
+            access_token = create_access_token(identity=customer)
+            refresh_token = create_refresh_token(identity=customer)
 
-    # Create new customer
-    new_customer = Customer(
-        email=data['email'].lower(),
-        first_name=data['first_name'],
-        last_name=data['last_name'],
-        company=data.get('company'),
-        phone=data.get('phone'),
-        role=CustomerRole.OWNER.value,  # Portal customers are owners
-        is_active=True,
-        is_verified=False,  # Email verification required
-        max_tenants=1,      # Default limit
-        max_quota_gb=10
-    )
-    new_customer.set_password(data['password'])
+            return jsonify({
+                'status': 'success',
+                'message': 'Registration successful',
+                'data': {
+                    'user': customer.to_dict(),
+                    'access_token': access_token,
+                    'refresh_token': refresh_token,
+                }
+            }), 201
 
-    db.session.add(new_customer)
-    db.session.commit()
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        return jsonify({'status': 'error', 'message': 'Registration failed'}), 500
 
-    current_app.logger.info(f"New customer registered: {new_customer.email}")
-
-    return jsonify({
-        'message': 'Registration successful',
-        'customer': {
-            'id': str(new_customer.id),
-            'email': new_customer.email,
-            'first_name': new_customer.first_name,
-            'last_name': new_customer.last_name,
-            'is_verified': new_customer.is_verified
-        }
-    }), 201
 
 @auth_bp.route('/login', methods=['POST'])
-@limiter.limit("10 per minute", key_func=rate_limit_key)
 def login():
     """Customer login"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+
+    if not email or not password:
+        return jsonify({'status': 'error', 'message': 'Email and password required'}), 400
+
     try:
-        schema = LoginSchema()
-        data = schema.load(request.get_json() or {})
-    except ValidationError as err:
-        return jsonify({
-            'error': 'Validation Error',
-            'message': 'Invalid request data',
-            'details': err.messages
-        }), 400
+        session = get_session()
+        customer = session.query(Customer).filter(Customer.email == email).first()
 
-    # Find customer by email
-    customer = Customer.query.filter_by(email=data['email'].lower()).first()
+        if not customer or not customer.check_password(password):
+            session.close()
+            return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
 
-    if not customer or not customer.check_password(data['password']):
-        current_app.logger.warning(f"Failed login attempt: {data['email']}")
-        return jsonify({
-            'error': 'Authentication Failed',
-            'message': 'Invalid email or password'
-        }), 401
+        if not customer.is_active:
+            session.close()
+            return jsonify({'status': 'error', 'message': 'Account is disabled'}), 403
 
-    if not customer.is_active:
-        current_app.logger.warning(f"Login attempt by disabled customer: {customer.email}")
-        return jsonify({
-            'error': 'Account Disabled',
-            'message': 'Your account has been disabled. Please contact support.'
-        }), 403
+        # Update last login
+        customer.last_login = datetime.utcnow()
 
-    # Create tokens
-    access_token = create_access_token(identity=customer)
-    refresh_token = create_refresh_token(identity=customer)
+        # Audit log
+        audit_log = AuditLog(
+            actor_id=customer.id,
+            actor_email=email,
+            actor_role=customer.role,
+            action=AuditAction.LOGIN.value,
+            resource_type='customer',
+            resource_id=str(customer.id),
+            ip_address=request.remote_addr,
+        )
+        session.add(audit_log)
+        session.commit()
 
-    # Update last login
-    customer.last_login = datetime.utcnow()
-    db.session.commit()
+        # Generate tokens
+        access_token = create_access_token(identity=customer)
+        refresh_token = create_refresh_token(identity=customer)
 
-    current_app.logger.info(f"Customer login successful: {customer.email}")
-
-    return jsonify({
-        'message': 'Login successful',
-        'access_token': access_token,
-        'refresh_token': refresh_token,
-        'customer': {
-            'id': str(customer.id),
-            'email': customer.email,
-            'first_name': customer.first_name,
-            'last_name': customer.last_name,
-            'company': customer.company,
-            'is_verified': customer.is_verified,
-            'max_tenants': customer.max_tenants,
-            'last_login': customer.last_login.isoformat() if customer.last_login else None
+        result = {
+            'status': 'success',
+            'message': 'Login successful',
+            'data': {
+                'user': customer.to_dict(),
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+            }
         }
-    }), 200
+
+        session.close()
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        return jsonify({'status': 'error', 'message': 'Login failed'}), 500
+
 
 @auth_bp.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
     """Refresh access token"""
-    current_customer = get_current_user()
-    
-    if not current_customer or not current_customer.is_active:
-        return jsonify({
-            'error': 'Invalid User',
-            'message': 'Customer account is invalid or disabled'
-        }), 401
+    try:
+        identity = get_jwt_identity()
+        session = get_session()
+        customer = session.query(Customer).filter(Customer.id == identity).first()
 
-    access_token = create_access_token(identity=current_customer)
-    
-    return jsonify({
-        'access_token': access_token
-    }), 200
+        if not customer or not customer.is_active:
+            session.close()
+            return jsonify({'status': 'error', 'message': 'Invalid user'}), 401
+
+        access_token = create_access_token(identity=customer)
+        session.close()
+
+        return jsonify({
+            'status': 'success',
+            'data': {'access_token': access_token}
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Token refresh error: {e}")
+        return jsonify({'status': 'error', 'message': 'Token refresh failed'}), 500
+
 
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
-    """Customer logout"""
-    current_customer = get_current_user()
-    
-    if current_customer:
-        current_app.logger.info(f"Customer logged out: {current_customer.email}")
-    
-    # TODO: Add token to blacklist
-    
-    return jsonify({
-        'message': 'Logout successful'
-    }), 200
+    """Logout customer"""
+    try:
+        identity = get_jwt_identity()
 
-@auth_bp.route('/profile', methods=['GET'])
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.id == identity).first()
+            if customer:
+                audit_log = AuditLog(
+                    actor_id=customer.id,
+                    actor_email=customer.email,
+                    actor_role=customer.role,
+                    action=AuditAction.LOGOUT.value,
+                    resource_type='customer',
+                    resource_id=str(customer.id),
+                    ip_address=request.remote_addr,
+                )
+                session.add(audit_log)
+
+        return jsonify({'status': 'success', 'message': 'Logout successful'}), 200
+
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        return jsonify({'status': 'error', 'message': 'Logout failed'}), 500
+
+
+@auth_bp.route('/me', methods=['GET'])
 @jwt_required()
 def get_profile():
-    """Get customer profile"""
-    current_customer = get_current_user()
-    
-    return jsonify({
-        'customer': current_customer.to_dict()
-    }), 200
+    """Get current user profile"""
+    try:
+        if current_user:
+            return jsonify({
+                'status': 'success',
+                'data': current_user.to_dict()
+            }), 200
+        return jsonify({'status': 'error', 'message': 'User not found'}), 404
 
-@auth_bp.route('/profile', methods=['PUT'])
+    except Exception as e:
+        logger.error(f"Get profile error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to get profile'}), 500
+
+
+@auth_bp.route('/me', methods=['PUT'])
 @jwt_required()
 def update_profile():
-    """Update customer profile"""
+    """Update current user profile"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
     try:
-        schema = UpdateProfileSchema()
-        data = schema.load(request.get_json() or {})
-    except ValidationError as err:
-        return jsonify({
-            'error': 'Validation Error',
-            'message': 'Invalid request data',
-            'details': err.messages
-        }), 400
+        identity = get_jwt_identity()
 
-    current_customer = get_current_user()
-    
-    # Update fields
-    for field, value in data.items():
-        if hasattr(current_customer, field):
-            setattr(current_customer, field, value)
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.id == identity).first()
 
-    db.session.commit()
+            if not customer:
+                return jsonify({'status': 'error', 'message': 'User not found'}), 404
 
-    current_app.logger.info(f"Profile updated: {current_customer.email}")
+            # Update allowed fields
+            if 'first_name' in data:
+                customer.first_name = data['first_name'].strip()
+            if 'last_name' in data:
+                customer.last_name = data['last_name'].strip()
+            if 'company' in data:
+                customer.company = data['company'].strip()
+            if 'phone' in data:
+                customer.phone = data['phone'].strip()
 
-    return jsonify({
-        'message': 'Profile updated successfully',
-        'customer': current_customer.to_dict()
-    }), 200
+            return jsonify({
+                'status': 'success',
+                'message': 'Profile updated',
+                'data': customer.to_dict()
+            }), 200
 
-@auth_bp.route('/verify-email', methods=['POST'])
-def verify_email():
-    """Verify email address"""
-    # TODO: Implement email verification with tokens
-    return jsonify({
-        'message': 'Email verification not yet implemented',
-        'todo': 'Implement email verification with secure tokens'
-    }), 501
+    except Exception as e:
+        logger.error(f"Update profile error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to update profile'}), 500
 
-@auth_bp.route('/forgot-password', methods=['POST'])
-@limiter.limit("3 per minute", key_func=rate_limit_key)
-def forgot_password():
-    """Request password reset"""
-    # TODO: Implement password reset
-    return jsonify({
-        'message': 'Password reset not yet implemented',
-        'todo': 'Implement secure password reset with email tokens'
-    }), 501
 
-@auth_bp.route('/reset-password', methods=['POST'])
-@limiter.limit("3 per minute", key_func=rate_limit_key)
-def reset_password():
-    """Reset password with token"""
-    # TODO: Implement password reset confirmation
-    return jsonify({
-        'message': 'Password reset confirmation not yet implemented',
-        'todo': 'Implement password reset with secure token validation'
-    }), 501
+@auth_bp.route('/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    """Change password"""
+    data = request.get_json()
 
-# Health check for auth service
-@auth_bp.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'portal-auth',
-        'timestamp': datetime.utcnow().isoformat()
-    }), 200
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not current_password or not new_password:
+        return jsonify({'status': 'error', 'message': 'Both passwords required'}), 400
+
+    if len(new_password) < 8:
+        return jsonify({'status': 'error', 'message': 'New password must be at least 8 characters'}), 400
+
+    try:
+        identity = get_jwt_identity()
+
+        with session_scope() as session:
+            customer = session.query(Customer).filter(Customer.id == identity).first()
+
+            if not customer:
+                return jsonify({'status': 'error', 'message': 'User not found'}), 404
+
+            if not customer.check_password(current_password):
+                return jsonify({'status': 'error', 'message': 'Current password is incorrect'}), 400
+
+            customer.set_password(new_password)
+
+            # Audit log
+            audit_log = AuditLog(
+                actor_id=customer.id,
+                actor_email=customer.email,
+                actor_role=customer.role,
+                action=AuditAction.PASSWORD_CHANGE.value,
+                resource_type='customer',
+                resource_id=str(customer.id),
+                ip_address=request.remote_addr,
+            )
+            session.add(audit_log)
+
+        return jsonify({'status': 'success', 'message': 'Password changed successfully'}), 200
+
+    except Exception as e:
+        logger.error(f"Change password error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to change password'}), 500

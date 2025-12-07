@@ -1,37 +1,46 @@
-# Background Workers Service Dockerfile
+# Workers Dockerfile
+# Optimized for Podman on Windows
+
 FROM python:3.11-slim
 
-# Set working directory
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Create app user and directory
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser \
+    && mkdir -p /app /tmp/backups \
+    && chown -R appuser:appgroup /app /tmp/backups
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies including PostgreSQL client
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    libpq-dev \
     postgresql-client \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY workers/requirements.txt .
+# Copy requirements first for caching
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy shared module (required for database models)
-COPY shared/ /app/shared/
+# Copy shared module
+COPY --chown=appuser:appgroup ../shared /app/shared/
 
 # Copy application code
-COPY workers/ /app/
+COPY --chown=appuser:appgroup . /app/workers/
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+# Set working directory to workers
+WORKDIR /app/workers
 
 # Switch to non-root user
 USER appuser
 
-# Expose metrics port
-EXPOSE 9091
-
-# Run RQ worker
-CMD ["python", "-m", "app.worker"]
+# Run the worker
+CMD ["python", "run.py"]

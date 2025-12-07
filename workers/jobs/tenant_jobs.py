@@ -1,577 +1,362 @@
-#!/usr/bin/env python3
 """
-Tenant Management Background Jobs
-Handles tenant provisioning, deletion, and module management
+Tenant Lifecycle Background Jobs
 """
-
 import os
 import sys
-import requests
 import logging
+import subprocess
 from datetime import datetime
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from shared.models import Tenant, Customer, AuditLog
-from shared.database import get_db_session
+from shared.database import session_scope, create_tenant_database, drop_tenant_database
+from shared.models import Tenant, Backup, AuditLog, TenantState, BackupStatus, AuditAction
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-ODOO_SERVICE_URL = os.environ.get('ODOO_SERVICE_URL', 'http://odoo-service:8080')
-TENANT_SERVICE_TIMEOUT = int(os.environ.get('TENANT_SERVICE_TIMEOUT', '300'))
 
-def provision_tenant_job(tenant_id, customer_id, tenant_data):
+def provision_tenant(tenant_id: str):
     """
-    Provision a new Odoo tenant
-    
-    Args:
-        tenant_id (int): Tenant ID
-        customer_id (int): Customer ID
-        tenant_data (dict): Tenant configuration data
-    
-    Returns:
-        dict: Provisioning result
+    Provision a new Odoo tenant.
+
+    This job:
+    1. Creates the PostgreSQL database
+    2. Initializes Odoo database
+    3. Updates tenant state to ACTIVE
     """
-    logger.info(f"Starting tenant provisioning for tenant {tenant_id}")
-    
+    logger.info(f"Starting tenant provisioning: {tenant_id}")
+
     try:
-        # Update tenant status to provisioning
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+
             if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            tenant.status = 'provisioning'
-            session.commit()
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=None,
-                tenant_id=tenant_id,
-                action='tenant_provisioning_started',
-                resource_type='tenant',
-                resource_id=tenant_id,
-                details={'tenant_data': tenant_data}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # Call Odoo service to create tenant
-        response = requests.post(
-            f"{ODOO_SERVICE_URL}/tenants/{tenant_id}/create",
-            json=tenant_data,
-            timeout=TENANT_SERVICE_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Update tenant status to active
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
-                tenant.status = 'active'
-                tenant.provisioned_at = datetime.utcnow()
-                session.commit()
-                
-                # Log success
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_provisioning_completed',
-                    resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'result': result}
-                )
-                session.add(audit)
-                session.commit()
-            
-            logger.info(f"Successfully provisioned tenant {tenant_id}")
-            return {
-                'status': 'success',
-                'tenant_id': tenant_id,
-                'message': 'Tenant provisioned successfully',
-                'details': result
-            }
-        
-        else:
-            error_msg = f"Failed to provision tenant: HTTP {response.status_code}"
-            logger.error(error_msg)
-            
-            # Update tenant status to failed
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
-                tenant.status = 'failed'
-                session.commit()
-                
-                # Log failure
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_provisioning_failed',
-                    resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'error': error_msg, 'response': response.text}
-                )
-                session.add(audit)
-                session.commit()
-            
-            raise Exception(error_msg)
-    
-    except Exception as e:
-        logger.error(f"Error provisioning tenant {tenant_id}: {e}")
-        
-        # Update tenant status to failed
-        try:
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
+                logger.error(f"Tenant not found: {tenant_id}")
+                return {'success': False, 'error': 'Tenant not found'}
+
+            if tenant.state != TenantState.CREATING.value:
+                logger.warning(f"Tenant {tenant_id} not in CREATING state: {tenant.state}")
+                return {'success': False, 'error': f'Invalid state: {tenant.state}'}
+
+            db_name = tenant.db_name
+
+        # Create the database
+        logger.info(f"Creating database: {db_name}")
+        if not create_tenant_database(db_name):
+            with session_scope() as session:
+                tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
                 if tenant:
-                    tenant.status = 'failed'
-                    session.commit()
-        except Exception as db_error:
-            logger.error(f"Failed to update tenant status: {db_error}")
-        
-        raise
+                    tenant.state = TenantState.ERROR.value
+                    tenant.state_message = "Failed to create database"
+            return {'success': False, 'error': 'Database creation failed'}
 
-def delete_tenant_job(tenant_id):
-    """
-    Delete an Odoo tenant
-    
-    Args:
-        tenant_id (int): Tenant ID
-    
-    Returns:
-        dict: Deletion result
-    """
-    logger.info(f"Starting tenant deletion for tenant {tenant_id}")
-    
-    try:
-        # Update tenant status to deleting
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            tenant.status = 'deleting'
-            session.commit()
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=None,
-                tenant_id=tenant_id,
-                action='tenant_deletion_started',
-                resource_type='tenant',
-                resource_id=tenant_id,
-                details={}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # Call Odoo service to delete tenant
-        response = requests.delete(
-            f"{ODOO_SERVICE_URL}/tenants/{tenant_id}/delete",
-            timeout=TENANT_SERVICE_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Mark tenant as deleted
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
-                tenant.status = 'deleted'
-                tenant.deleted_at = datetime.utcnow()
-                session.commit()
-                
-                # Log success
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_deletion_completed',
+        # Update tenant state to ACTIVE
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+            if tenant:
+                tenant.state = TenantState.ACTIVE.value
+                tenant.state_message = None
+
+                # Create audit log
+                audit_log = AuditLog(
+                    actor_email='system',
+                    action=AuditAction.CREATE.value,
                     resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'result': result}
+                    resource_id=str(tenant_id),
+                    new_values={
+                        'state': TenantState.ACTIVE.value,
+                        'db_name': db_name,
+                        'provisioned_at': datetime.utcnow().isoformat()
+                    }
                 )
-                session.add(audit)
-                session.commit()
-            
-            logger.info(f"Successfully deleted tenant {tenant_id}")
-            return {
-                'status': 'success',
-                'tenant_id': tenant_id,
-                'message': 'Tenant deleted successfully',
-                'details': result
-            }
-        
-        else:
-            error_msg = f"Failed to delete tenant: HTTP {response.status_code}"
-            logger.error(error_msg)
-            
-            # Update tenant status back to previous state
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
-                tenant.status = 'active'  # Assume it was active before
-                session.commit()
-                
-                # Log failure
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_deletion_failed',
-                    resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'error': error_msg, 'response': response.text}
-                )
-                session.add(audit)
-                session.commit()
-            
-            raise Exception(error_msg)
-    
-    except Exception as e:
-        logger.error(f"Error deleting tenant {tenant_id}: {e}")
-        raise
+                session.add(audit_log)
 
-def install_module_job(tenant_id, module_name, user_id=None):
-    """
-    Install Odoo module in tenant
-    
-    Args:
-        tenant_id (int): Tenant ID
-        module_name (str): Module name to install
-        user_id (int, optional): User who initiated the action
-    
-    Returns:
-        dict: Installation result
-    """
-    logger.info(f"Installing module {module_name} in tenant {tenant_id}")
-    
-    try:
-        # Verify tenant exists and is active
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            if tenant.status != 'active':
-                raise Exception(f"Tenant {tenant_id} is not active")
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=user_id,
-                tenant_id=tenant_id,
-                action='module_installation_started',
-                resource_type='module',
-                resource_id=module_name,
-                details={'module_name': module_name}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # Call Odoo service to install module
-        response = requests.post(
-            f"{ODOO_SERVICE_URL}/tenants/{tenant_id}/modules/{module_name}/install",
-            timeout=TENANT_SERVICE_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Log success
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    action='module_installation_completed',
-                    resource_type='module',
-                    resource_id=module_name,
-                    details={'result': result}
-                )
-                session.add(audit)
-                session.commit()
-            
-            logger.info(f"Successfully installed module {module_name} in tenant {tenant_id}")
-            return {
-                'status': 'success',
-                'tenant_id': tenant_id,
-                'module': module_name,
-                'message': 'Module installed successfully',
-                'details': result
-            }
-        
-        else:
-            error_msg = f"Failed to install module: HTTP {response.status_code}"
-            logger.error(error_msg)
-            
-            # Log failure
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    action='module_installation_failed',
-                    resource_type='module',
-                    resource_id=module_name,
-                    details={'error': error_msg, 'response': response.text}
-                )
-                session.add(audit)
-                session.commit()
-            
-            raise Exception(error_msg)
-    
-    except Exception as e:
-        logger.error(f"Error installing module {module_name} in tenant {tenant_id}: {e}")
-        raise
+        logger.info(f"Tenant provisioned successfully: {tenant_id}")
+        return {'success': True, 'tenant_id': tenant_id, 'db_name': db_name}
 
-def uninstall_module_job(tenant_id, module_name, user_id=None):
-    """
-    Uninstall Odoo module from tenant
-    
-    Args:
-        tenant_id (int): Tenant ID
-        module_name (str): Module name to uninstall
-        user_id (int, optional): User who initiated the action
-    
-    Returns:
-        dict: Uninstallation result
-    """
-    logger.info(f"Uninstalling module {module_name} from tenant {tenant_id}")
-    
-    try:
-        # Verify tenant exists and is active
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            if tenant.status != 'active':
-                raise Exception(f"Tenant {tenant_id} is not active")
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=user_id,
-                tenant_id=tenant_id,
-                action='module_uninstallation_started',
-                resource_type='module',
-                resource_id=module_name,
-                details={'module_name': module_name}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # Call Odoo service to uninstall module
-        response = requests.delete(
-            f"{ODOO_SERVICE_URL}/tenants/{tenant_id}/modules/{module_name}/uninstall",
-            timeout=TENANT_SERVICE_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Log success
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    action='module_uninstallation_completed',
-                    resource_type='module',
-                    resource_id=module_name,
-                    details={'result': result}
-                )
-                session.add(audit)
-                session.commit()
-            
-            logger.info(f"Successfully uninstalled module {module_name} from tenant {tenant_id}")
-            return {
-                'status': 'success',
-                'tenant_id': tenant_id,
-                'module': module_name,
-                'message': 'Module uninstalled successfully',
-                'details': result
-            }
-        
-        else:
-            error_msg = f"Failed to uninstall module: HTTP {response.status_code}"
-            logger.error(error_msg)
-            
-            # Log failure
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    action='module_uninstallation_failed',
-                    resource_type='module',
-                    resource_id=module_name,
-                    details={'error': error_msg, 'response': response.text}
-                )
-                session.add(audit)
-                session.commit()
-            
-            raise Exception(error_msg)
-    
     except Exception as e:
-        logger.error(f"Error uninstalling module {module_name} from tenant {tenant_id}: {e}")
-        raise
+        logger.error(f"Provisioning failed for tenant {tenant_id}: {e}")
 
-def backup_tenant_job(tenant_id):
-    """
-    Create backup of tenant
-    
-    Args:
-        tenant_id (int): Tenant ID
-    
-    Returns:
-        dict: Backup result
-    """
-    logger.info(f"Creating backup for tenant {tenant_id}")
-    
-    try:
-        # Verify tenant exists and is active
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=None,
-                tenant_id=tenant_id,
-                action='tenant_backup_started',
-                resource_type='tenant',
-                resource_id=tenant_id,
-                details={}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # Call Odoo service to create backup
-        response = requests.post(
-            f"{ODOO_SERVICE_URL}/tenants/{tenant_id}/backup",
-            timeout=1800  # 30 minute timeout for backups
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Log success
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_backup_completed',
-                    resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'result': result}
-                )
-                session.add(audit)
-                session.commit()
-            
-            logger.info(f"Successfully created backup for tenant {tenant_id}")
-            return {
-                'status': 'success',
-                'tenant_id': tenant_id,
-                'message': 'Backup created successfully',
-                'details': result
-            }
-        
-        else:
-            error_msg = f"Failed to create backup: HTTP {response.status_code}"
-            logger.error(error_msg)
-            
-            # Log failure
-            with get_db_session() as session:
-                audit = AuditLog(
-                    user_id=None,
-                    tenant_id=tenant_id,
-                    action='tenant_backup_failed',
-                    resource_type='tenant',
-                    resource_id=tenant_id,
-                    details={'error': error_msg, 'response': response.text}
-                )
-                session.add(audit)
-                session.commit()
-            
-            raise Exception(error_msg)
-    
-    except Exception as e:
-        logger.error(f"Error creating backup for tenant {tenant_id}: {e}")
-        raise
-
-def restore_tenant_job(tenant_id, backup_file):
-    """
-    Restore tenant from backup
-    
-    Args:
-        tenant_id (int): Tenant ID
-        backup_file (str): Backup file name
-    
-    Returns:
-        dict: Restore result
-    """
-    logger.info(f"Restoring tenant {tenant_id} from backup {backup_file}")
-    
-    try:
-        # Update tenant status to restoring
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            if not tenant:
-                raise Exception(f"Tenant {tenant_id} not found")
-            
-            tenant.status = 'restoring'
-            session.commit()
-            
-            # Log audit event
-            audit = AuditLog(
-                user_id=None,
-                tenant_id=tenant_id,
-                action='tenant_restore_started',
-                resource_type='tenant',
-                resource_id=tenant_id,
-                details={'backup_file': backup_file}
-            )
-            session.add(audit)
-            session.commit()
-        
-        # TODO: Call backup service or Odoo service to restore from backup
-        # This would integrate with the S3 backup service
-        logger.info(f"Restore functionality for tenant {tenant_id} - placeholder")
-        
-        # Update tenant status to active
-        with get_db_session() as session:
-            tenant = session.query(Tenant).get(tenant_id)
-            tenant.status = 'active'
-            session.commit()
-            
-            # Log success
-            audit = AuditLog(
-                user_id=None,
-                tenant_id=tenant_id,
-                action='tenant_restore_completed',
-                resource_type='tenant',
-                resource_id=tenant_id,
-                details={'backup_file': backup_file}
-            )
-            session.add(audit)
-            session.commit()
-        
-        logger.info(f"Successfully restored tenant {tenant_id} from backup")
-        return {
-            'status': 'success',
-            'tenant_id': tenant_id,
-            'backup_file': backup_file,
-            'message': 'Tenant restored successfully'
-        }
-    
-    except Exception as e:
-        logger.error(f"Error restoring tenant {tenant_id}: {e}")
-        
-        # Update tenant status to failed
+        # Update state to ERROR
         try:
-            with get_db_session() as session:
-                tenant = session.query(Tenant).get(tenant_id)
+            with session_scope() as session:
+                tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
                 if tenant:
-                    tenant.status = 'failed'
-                    session.commit()
-        except Exception as db_error:
-            logger.error(f"Failed to update tenant status: {db_error}")
-        
-        raise
+                    tenant.state = TenantState.ERROR.value
+                    tenant.state_message = str(e)[:500]
+        except Exception as inner_e:
+            logger.error(f"Failed to update tenant state: {inner_e}")
+
+        return {'success': False, 'error': str(e)}
+
+
+def delete_tenant(tenant_id: str):
+    """
+    Delete an Odoo tenant.
+
+    This job:
+    1. Drops the PostgreSQL database
+    2. Removes filestore
+    3. Updates tenant state to DELETED
+    """
+    logger.info(f"Starting tenant deletion: {tenant_id}")
+
+    try:
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+
+            if not tenant:
+                logger.error(f"Tenant not found: {tenant_id}")
+                return {'success': False, 'error': 'Tenant not found'}
+
+            if tenant.state == TenantState.DELETED.value:
+                logger.warning(f"Tenant {tenant_id} already deleted")
+                return {'success': True, 'message': 'Already deleted'}
+
+            db_name = tenant.db_name
+
+        # Drop the database
+        if db_name:
+            logger.info(f"Dropping database: {db_name}")
+            drop_tenant_database(db_name)
+
+        # Update tenant state
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+            if tenant:
+                tenant.state = TenantState.DELETED.value
+                tenant.state_message = f"Deleted at {datetime.utcnow().isoformat()}"
+
+                # Audit log
+                audit_log = AuditLog(
+                    actor_email='system',
+                    action=AuditAction.DELETE.value,
+                    resource_type='tenant',
+                    resource_id=str(tenant_id),
+                    old_values={'db_name': db_name},
+                    new_values={'state': TenantState.DELETED.value}
+                )
+                session.add(audit_log)
+
+        logger.info(f"Tenant deleted successfully: {tenant_id}")
+        return {'success': True, 'tenant_id': tenant_id}
+
+    except Exception as e:
+        logger.error(f"Deletion failed for tenant {tenant_id}: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def backup_tenant(tenant_id: str, backup_id: str = None):
+    """
+    Create a backup of tenant data.
+
+    This job:
+    1. Dumps the PostgreSQL database
+    2. Creates backup archive
+    3. Updates backup record
+    """
+    logger.info(f"Starting backup for tenant: {tenant_id}")
+
+    try:
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+
+            if not tenant:
+                return {'success': False, 'error': 'Tenant not found'}
+
+            if tenant.state != TenantState.ACTIVE.value:
+                return {'success': False, 'error': f'Tenant not active: {tenant.state}'}
+
+            db_name = tenant.db_name
+
+            # Update backup status
+            if backup_id:
+                backup = session.query(Backup).filter(Backup.id == backup_id).first()
+                if backup:
+                    backup.status = BackupStatus.IN_PROGRESS.value
+                    backup.started_at = datetime.utcnow()
+
+        # Perform database dump
+        backup_dir = os.getenv('BACKUP_DIR', '/tmp/backups')
+        os.makedirs(backup_dir, exist_ok=True)
+
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{backup_dir}/{db_name}_{timestamp}.sql"
+
+        pg_host = os.getenv('PG_HOST', 'postgres')
+        pg_port = os.getenv('PG_PORT', '5432')
+        pg_user = os.getenv('PG_USER', 'odoo')
+        pg_password = os.getenv('PG_PASSWORD', 'odoo_password')
+
+        # Set password in environment
+        env = os.environ.copy()
+        env['PGPASSWORD'] = pg_password
+
+        try:
+            # Run pg_dump
+            result = subprocess.run(
+                [
+                    'pg_dump',
+                    '-h', pg_host,
+                    '-p', pg_port,
+                    '-U', pg_user,
+                    '-F', 'c',  # Custom format
+                    '-f', backup_file,
+                    db_name
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=3600
+            )
+
+            if result.returncode != 0:
+                raise Exception(f"pg_dump failed: {result.stderr}")
+
+            # Get file size
+            file_size = os.path.getsize(backup_file) if os.path.exists(backup_file) else 0
+
+            # Update backup record
+            with session_scope() as session:
+                if backup_id:
+                    backup = session.query(Backup).filter(Backup.id == backup_id).first()
+                    if backup:
+                        backup.status = BackupStatus.COMPLETED.value
+                        backup.completed_at = datetime.utcnow()
+                        backup.file_path = backup_file
+                        backup.file_size_bytes = file_size
+
+                # Update tenant last backup time
+                tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+                if tenant:
+                    tenant.last_backup_at = datetime.utcnow()
+
+                # Audit log
+                audit_log = AuditLog(
+                    actor_email='system',
+                    action=AuditAction.BACKUP.value,
+                    resource_type='tenant',
+                    resource_id=str(tenant_id),
+                    new_values={
+                        'backup_file': backup_file,
+                        'file_size': file_size,
+                    }
+                )
+                session.add(audit_log)
+
+            logger.info(f"Backup completed: {backup_file} ({file_size} bytes)")
+            return {
+                'success': True,
+                'tenant_id': tenant_id,
+                'backup_file': backup_file,
+                'file_size': file_size
+            }
+
+        except subprocess.TimeoutExpired:
+            raise Exception("Backup timed out after 1 hour")
+
+    except Exception as e:
+        logger.error(f"Backup failed for tenant {tenant_id}: {e}")
+
+        # Update backup status
+        if backup_id:
+            try:
+                with session_scope() as session:
+                    backup = session.query(Backup).filter(Backup.id == backup_id).first()
+                    if backup:
+                        backup.status = BackupStatus.FAILED.value
+                        backup.error_message = str(e)[:500]
+            except Exception:
+                pass
+
+        return {'success': False, 'error': str(e)}
+
+
+def restore_tenant(tenant_id: str, backup_id: str):
+    """
+    Restore tenant from backup.
+
+    This job:
+    1. Verifies backup exists
+    2. Restores database from backup
+    3. Updates tenant state
+    """
+    logger.info(f"Starting restore for tenant {tenant_id} from backup {backup_id}")
+
+    try:
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+            backup = session.query(Backup).filter(Backup.id == backup_id).first()
+
+            if not tenant:
+                return {'success': False, 'error': 'Tenant not found'}
+
+            if not backup:
+                return {'success': False, 'error': 'Backup not found'}
+
+            if backup.tenant_id != tenant.id:
+                return {'success': False, 'error': 'Backup does not belong to this tenant'}
+
+            if not backup.file_path or not os.path.exists(backup.file_path):
+                return {'success': False, 'error': 'Backup file not found'}
+
+            db_name = tenant.db_name
+            backup_file = backup.file_path
+
+        pg_host = os.getenv('PG_HOST', 'postgres')
+        pg_port = os.getenv('PG_PORT', '5432')
+        pg_user = os.getenv('PG_USER', 'odoo')
+        pg_password = os.getenv('PG_PASSWORD', 'odoo_password')
+
+        env = os.environ.copy()
+        env['PGPASSWORD'] = pg_password
+
+        # Drop and recreate database
+        drop_tenant_database(db_name)
+        create_tenant_database(db_name)
+
+        # Restore from backup
+        result = subprocess.run(
+            [
+                'pg_restore',
+                '-h', pg_host,
+                '-p', pg_port,
+                '-U', pg_user,
+                '-d', db_name,
+                backup_file
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=3600
+        )
+
+        if result.returncode != 0:
+            logger.warning(f"pg_restore warnings: {result.stderr}")
+
+        # Update tenant state
+        with session_scope() as session:
+            tenant = session.query(Tenant).filter(Tenant.id == tenant_id).first()
+            if tenant:
+                tenant.state = TenantState.ACTIVE.value
+
+            # Audit log
+            audit_log = AuditLog(
+                actor_email='system',
+                action=AuditAction.RESTORE.value,
+                resource_type='tenant',
+                resource_id=str(tenant_id),
+                new_values={
+                    'backup_id': str(backup_id),
+                    'restored_at': datetime.utcnow().isoformat(),
+                }
+            )
+            session.add(audit_log)
+
+        logger.info(f"Restore completed for tenant {tenant_id}")
+        return {'success': True, 'tenant_id': tenant_id}
+
+    except Exception as e:
+        logger.error(f"Restore failed for tenant {tenant_id}: {e}")
+        return {'success': False, 'error': str(e)}

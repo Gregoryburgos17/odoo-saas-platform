@@ -1,44 +1,53 @@
-# Admin Dashboard Service Dockerfile
+# Admin Dashboard Dockerfile
+# Optimized for Podman on Windows
+
 FROM python:3.11-slim
 
-# Set working directory
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Create app user and directory
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser \
+    && mkdir -p /app \
+    && chown -R appuser:appgroup /app
+
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    postgresql-client \
+    libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY admin/requirements.txt .
+# Copy requirements first for caching
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy shared module
-COPY shared/ /app/shared/
+COPY --chown=appuser:appgroup ../shared /app/shared/
 
 # Copy application code
-COPY admin/ /app/admin/
+COPY --chown=appuser:appgroup . /app/admin/
 
-# Create logs directory
-RUN mkdir -p /app/logs
-
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+# Set working directory to admin
+WORKDIR /app/admin
 
 # Switch to non-root user
 USER appuser
 
 # Expose port
-EXPOSE 5000 9090
+EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:5000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "--chdir", "/app/admin", "app:create_app()"]
+# Run the application
+CMD ["python", "run.py"]

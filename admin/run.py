@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Customer Portal Entry Point
+Admin Dashboard Entry Point
 """
 import os
 import sys
@@ -12,7 +12,8 @@ from app import create_app
 
 
 def main():
-    """Run the customer portal"""
+    """Run the admin dashboard"""
+    # Create application
     app = create_app()
 
     # Initialize database
@@ -26,11 +27,12 @@ def main():
 
     # Get configuration
     host = os.getenv('FLASK_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_PORT', '5001'))
+    port = int(os.getenv('FLASK_PORT', '5000'))
     debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
 
-    print(f"Starting Customer Portal on {host}:{port}")
+    print(f"Starting Admin Dashboard on {host}:{port}")
 
+    # Run server
     app.run(
         host=host,
         port=port,

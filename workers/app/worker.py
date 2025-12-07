@@ -1,411 +1,120 @@
 #!/usr/bin/env python3
 """
-Background Job Worker Service
-Handles asynchronous tasks using Redis Queue (RQ)
+RQ Worker Manager for Odoo SaaS Platform
 """
-
 import os
 import sys
-import time
-import logging
 import signal
-from datetime import datetime, timedelta
-import redis
-from rq import Worker, Queue, Connection
-from rq.job import Job
+import logging
+from datetime import datetime
 
-# Configure logging first
+from redis import Redis
+from rq import Worker, Queue, Connection
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-# Import available job modules
-try:
-    from jobs.tenant_jobs import (
-        provision_tenant_job,
-        delete_tenant_job,
-        install_module_job,
-        uninstall_module_job,
-        backup_tenant_job,
-        restore_tenant_job
-    )
-except ImportError as e:
-    logger.warning(f"Could not import tenant_jobs: {e}")
-    provision_tenant_job = None
-    delete_tenant_job = None
-    install_module_job = None
-    uninstall_module_job = None
-    backup_tenant_job = None
-    restore_tenant_job = None
-
-# Additional job modules can be imported here as they are implemented
-# For now, we'll comment out the modules that don't exist yet
-
-# from jobs.backup_jobs import (
-#     backup_database_to_s3_job,
-#     restore_database_from_s3_job,
-#     cleanup_old_backups_job,
-#     verify_backup_integrity_job
-# )
-#
-# from jobs.billing_jobs import (
-#     process_payment_webhook_job,
-#     send_invoice_job,
-#     process_subscription_change_job,
-#     send_billing_notification_job
-# )
-#
-# from jobs.notification_jobs import (
-#     send_email_job,
-#     send_sms_job,
-#     send_slack_notification_job,
-#     send_welcome_email_job,
-#     send_support_notification_job
-# )
-#
-# from jobs.monitoring_jobs import (
-#     collect_tenant_metrics_job,
-#     check_system_health_job,
-#     cleanup_old_logs_job,
-#     generate_usage_report_job
-# )
-
-# Configuration
-REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.environ.get('REDIS_PORT', '6379'))
-REDIS_DB = int(os.environ.get('REDIS_WORKER_DB', '3'))
-REDIS_PASSWORD = os.environ.get('REDIS_PASSWORD', None)
-
-WORKER_NAME = os.environ.get('WORKER_NAME', f'worker-{os.getpid()}')
-WORKER_QUEUES = os.environ.get('WORKER_QUEUES', 'high,default,low').split(',')
-
-# Queue priorities
-HIGH_PRIORITY_QUEUE = 'high'
-DEFAULT_QUEUE = 'default'
-LOW_PRIORITY_QUEUE = 'low'
 
 class WorkerManager:
-    """Manages RQ workers and job queues"""
-    
+    """Manages RQ workers"""
+
     def __init__(self):
-        self.redis_conn = self.get_redis_connection()
-        self.queues = self.initialize_queues()
+        self.redis_host = os.getenv('REDIS_HOST', 'redis')
+        self.redis_port = int(os.getenv('REDIS_PORT', '6379'))
+        self.redis_password = os.getenv('REDIS_PASSWORD', '')
+
+        self.queues = ['high', 'default', 'low']
+        self.connection = None
         self.worker = None
-        self.running = False
-        
-    def get_redis_connection(self):
-        """Get Redis connection"""
-        try:
-            conn = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                db=REDIS_DB,
-                password=REDIS_PASSWORD,
-                decode_responses=True
-            )
-            conn.ping()
-            logger.info(f"Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
-            return conn
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
-            raise
-    
-    def initialize_queues(self):
-        """Initialize job queues"""
-        queues = []
-        for queue_name in WORKER_QUEUES:
-            queue = Queue(queue_name, connection=self.redis_conn)
-            queues.append(queue)
-            logger.info(f"Initialized queue: {queue_name}")
-        
-        return queues
-    
-    def create_worker(self):
-        """Create RQ worker"""
-        self.worker = Worker(
-            self.queues,
-            connection=self.redis_conn,
-            name=WORKER_NAME
-        )
-        
-        # Set worker properties
-        self.worker.job_timeout = 1800  # 30 minutes default timeout
-        self.worker.result_ttl = 86400  # Keep results for 24 hours
-        
-        logger.info(f"Created worker: {WORKER_NAME}")
-        return self.worker
-    
-    def start_worker(self):
-        """Start the worker"""
-        if not self.worker:
-            self.create_worker()
-        
-        logger.info(f"Starting worker {WORKER_NAME} for queues: {WORKER_QUEUES}")
-        
         self.running = True
-        
-        try:
-            # Start worker with exception handling
-            self.worker.work(
-                with_scheduler=True,  # Enable job scheduling
-                logging_level='INFO'
+
+    def get_connection(self) -> Redis:
+        """Get Redis connection"""
+        if self.connection is None:
+            self.connection = Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                password=self.redis_password if self.redis_password else None,
             )
-        except KeyboardInterrupt:
-            logger.info("Received interrupt signal, shutting down...")
-            self.stop_worker()
+        return self.connection
+
+    def setup_signal_handlers(self):
+        """Setup graceful shutdown handlers"""
+        def shutdown_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            self.running = False
+            if self.worker:
+                self.worker.request_stop(signum, frame)
+
+        signal.signal(signal.SIGTERM, shutdown_handler)
+        signal.signal(signal.SIGINT, shutdown_handler)
+
+    def run(self):
+        """Start the worker"""
+        logger.info("=" * 60)
+        logger.info("Starting Odoo SaaS Worker")
+        logger.info(f"Redis: {self.redis_host}:{self.redis_port}")
+        logger.info(f"Queues: {', '.join(self.queues)}")
+        logger.info("=" * 60)
+
+        self.setup_signal_handlers()
+
+        try:
+            conn = self.get_connection()
+
+            # Test connection
+            conn.ping()
+            logger.info("Redis connection successful")
+
+            # Create queues
+            queues = [Queue(name, connection=conn) for name in self.queues]
+
+            # Create and start worker
+            self.worker = Worker(
+                queues,
+                connection=conn,
+                name=f"worker-{os.getpid()}",
+            )
+
+            logger.info(f"Worker {self.worker.name} starting...")
+            self.worker.work(with_scheduler=True)
+
         except Exception as e:
             logger.error(f"Worker error: {e}")
-            self.stop_worker()
             raise
-    
-    def stop_worker(self):
-        """Stop the worker gracefully"""
-        self.running = False
 
-        if self.worker:
-            logger.info("Stopping worker...")
-            # Send SIGTERM signal to request_stop
-            import signal as sig
-            self.worker.request_stop(sig.SIGTERM, None)
-    
-    def setup_signal_handlers(self):
-        """Set up signal handlers for graceful shutdown"""
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, shutting down...")
-            self.stop_worker()
-        
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+        finally:
+            logger.info("Worker stopped")
 
-def enqueue_job(queue_name, func, *args, job_timeout=1800, **kwargs):
-    """
-    Enqueue a job in the specified queue
-    
-    Args:
-        queue_name (str): Queue name ('high', 'default', 'low')
-        func: Function to execute
-        *args: Function arguments
-        job_timeout (int): Job timeout in seconds
-        **kwargs: Function keyword arguments
-    
-    Returns:
-        Job: RQ Job object
-    """
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        queue = Queue(queue_name, connection=redis_conn)
-        
-        job = queue.enqueue(
-            func,
-            *args,
-            job_timeout=job_timeout,
-            **kwargs
-        )
-        
-        logger.info(f"Enqueued job {job.id} in queue {queue_name}")
-        return job
-        
-    except Exception as e:
-        logger.error(f"Failed to enqueue job: {e}")
-        raise
 
-def enqueue_scheduled_job(queue_name, func, scheduled_time, *args, **kwargs):
-    """
-    Schedule a job to run at a specific time
-    
-    Args:
-        queue_name (str): Queue name
-        func: Function to execute
-        scheduled_time (datetime): When to run the job
-        *args: Function arguments
-        **kwargs: Function keyword arguments
-    
-    Returns:
-        Job: RQ Job object
-    """
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        queue = Queue(queue_name, connection=redis_conn)
-        
-        job = queue.enqueue_at(
-            scheduled_time,
-            func,
-            *args,
-            **kwargs
-        )
-        
-        logger.info(f"Scheduled job {job.id} in queue {queue_name} for {scheduled_time}")
-        return job
-        
-    except Exception as e:
-        logger.error(f"Failed to schedule job: {e}")
-        raise
+def get_queue(name: str = 'default') -> Queue:
+    """Get a queue by name"""
+    redis_conn = Redis(
+        host=os.getenv('REDIS_HOST', 'redis'),
+        port=int(os.getenv('REDIS_PORT', '6379')),
+        password=os.getenv('REDIS_PASSWORD', '') or None,
+    )
+    return Queue(name, connection=redis_conn)
 
-def get_job_status(job_id):
-    """
-    Get status of a job
-    
-    Args:
-        job_id (str): Job ID
-    
-    Returns:
-        dict: Job status information
-    """
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        job = Job.fetch(job_id, connection=redis_conn)
-        
-        return {
-            'id': job.id,
-            'status': job.get_status(),
-            'created_at': job.created_at.isoformat() if job.created_at else None,
-            'started_at': job.started_at.isoformat() if job.started_at else None,
-            'ended_at': job.ended_at.isoformat() if job.ended_at else None,
-            'result': job.result,
-            'exc_info': job.exc_info,
-            'meta': job.meta
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get job status: {e}")
-        return None
 
-def cancel_job(job_id):
-    """
-    Cancel a job
-    
-    Args:
-        job_id (str): Job ID
-    
-    Returns:
-        bool: True if cancelled successfully
-    """
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        job = Job.fetch(job_id, connection=redis_conn)
-        job.cancel()
-        
-        logger.info(f"Cancelled job {job_id}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to cancel job: {e}")
-        return False
+def enqueue_job(func, *args, queue_name: str = 'default', **kwargs):
+    """Enqueue a job"""
+    queue = get_queue(queue_name)
+    return queue.enqueue(func, *args, **kwargs)
 
-def get_queue_info():
-    """
-    Get information about all queues
-    
-    Returns:
-        dict: Queue information
-    """
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        queue_info = {}
-        
-        for queue_name in ['high', 'default', 'low']:
-            queue = Queue(queue_name, connection=redis_conn)
-            
-            queue_info[queue_name] = {
-                'length': len(queue),
-                'jobs': [job.id for job in queue.jobs],
-                'failed_jobs': len(queue.failed_job_registry),
-                'started_jobs': len(queue.started_job_registry),
-                'finished_jobs': len(queue.finished_job_registry)
-            }
-        
-        return queue_info
-        
-    except Exception as e:
-        logger.error(f"Failed to get queue info: {e}")
-        return {}
 
-def cleanup_old_jobs():
-    """Clean up old completed and failed jobs"""
-    try:
-        redis_conn = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            db=REDIS_DB,
-            password=REDIS_PASSWORD
-        )
-        
-        cutoff_time = datetime.utcnow() - timedelta(days=7)  # Keep jobs for 7 days
-        
-        for queue_name in ['high', 'default', 'low']:
-            queue = Queue(queue_name, connection=redis_conn)
-            
-            # Clean up finished jobs
-            finished_registry = queue.finished_job_registry
-            job_ids = finished_registry.get_job_ids()
-            
-            for job_id in job_ids:
-                try:
-                    job = Job.fetch(job_id, connection=redis_conn)
-                    if job.ended_at and job.ended_at < cutoff_time:
-                        finished_registry.remove(job_id)
-                        logger.info(f"Cleaned up finished job {job_id}")
-                except:
-                    # Job might not exist anymore
-                    continue
-            
-            # Clean up failed jobs
-            failed_registry = queue.failed_job_registry
-            job_ids = failed_registry.get_job_ids()
-            
-            for job_id in job_ids:
-                try:
-                    job = Job.fetch(job_id, connection=redis_conn)
-                    if job.ended_at and job.ended_at < cutoff_time:
-                        failed_registry.remove(job_id)
-                        logger.info(f"Cleaned up failed job {job_id}")
-                except:
-                    continue
-        
-        logger.info("Completed job cleanup")
-        
-    except Exception as e:
-        logger.error(f"Failed to cleanup old jobs: {e}")
+def main():
+    """Main entry point"""
+    manager = WorkerManager()
+    manager.run()
+
 
 if __name__ == '__main__':
-    # Create and start worker manager
-    manager = WorkerManager()
-    manager.setup_signal_handlers()
-    
-    logger.info("Starting background job worker...")
-    manager.start_worker()
+    main()

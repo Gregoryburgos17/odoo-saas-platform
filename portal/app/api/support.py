@@ -1,371 +1,281 @@
-#!/usr/bin/env python3
 """
-Support Tickets API
-Handles customer support ticket management
+Support Tickets API for Customer Portal
 """
-
-import os
-import sys
+import logging
 from datetime import datetime
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+from shared.database import session_scope, get_session
+from shared.models import SupportTicket, Customer, TicketStatus, TicketPriority
 
-from shared.models import SupportTicket, Customer
-from portal.app import db, limiter
-from portal.app.utils.validation import validate_json
-from portal.app.utils.auth import require_customer
+logger = logging.getLogger(__name__)
 
-# Create blueprint
 support_bp = Blueprint('support', __name__)
 
-# Input validation schemas
-TICKET_CREATE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'subject': {
-            'type': 'string',
-            'minLength': 3,
-            'maxLength': 200
-        },
-        'description': {
-            'type': 'string',
-            'minLength': 10,
-            'maxLength': 5000
-        },
-        'priority': {
-            'type': 'string',
-            'enum': ['low', 'medium', 'high', 'urgent']
-        },
-        'category': {
-            'type': 'string',
-            'enum': ['billing', 'technical', 'feature_request', 'other']
-        }
-    },
-    'required': ['subject', 'description', 'category'],
-    'additionalProperties': False
-}
 
-TICKET_UPDATE_SCHEMA = {
-    'type': 'object',
-    'properties': {
-        'description': {
-            'type': 'string',
-            'minLength': 10,
-            'maxLength': 5000
-        }
-    },
-    'required': ['description'],
-    'additionalProperties': False
-}
-
-@support_bp.route('/', methods=['GET'])
+@support_bp.route('/tickets', methods=['GET'])
 @jwt_required()
-@require_customer
-@limiter.limit("30 per minute")
 def list_tickets():
-    """List support tickets for current customer"""
+    """List customer's support tickets"""
     try:
-        customer_id = get_jwt_identity()
-        
+        identity = get_jwt_identity()
+        session = get_session()
+
         # Query parameters
         status = request.args.get('status')
-        category = request.args.get('category')
-        page = int(request.args.get('page', 1))
-        per_page = min(int(request.args.get('per_page', 20)), 100)
-        
-        # Build query
-        query = SupportTicket.query.filter_by(customer_id=customer_id)
-        
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 20, type=int), 100)
+
+        query = session.query(SupportTicket).filter(
+            SupportTicket.customer_id == identity
+        )
+
         if status:
             query = query.filter(SupportTicket.status == status)
-        if category:
-            query = query.filter(SupportTicket.category == category)
-        
-        # Order by creation date (newest first)
-        query = query.order_by(SupportTicket.created_at.desc())
-        
-        # Paginate
-        tickets = query.paginate(
-            page=page,
-            per_page=per_page,
-            error_out=False
-        )
-        
-        return jsonify({
-            'tickets': [{
-                'id': ticket.id,
-                'subject': ticket.subject,
-                'status': ticket.status,
-                'priority': ticket.priority,
-                'category': ticket.category,
-                'created_at': ticket.created_at.isoformat() if ticket.created_at else None,
-                'updated_at': ticket.updated_at.isoformat() if ticket.updated_at else None,
-                'last_response_at': ticket.last_response_at.isoformat() if ticket.last_response_at else None
-            } for ticket in tickets.items],
-            'pagination': {
-                'page': tickets.page,
-                'pages': tickets.pages,
-                'per_page': tickets.per_page,
-                'total': tickets.total,
-                'has_next': tickets.has_next,
-                'has_prev': tickets.has_prev
+
+        total = query.count()
+        tickets = query.order_by(SupportTicket.created_at.desc()) \
+            .offset((page - 1) * per_page) \
+            .limit(per_page) \
+            .all()
+
+        result = {
+            'status': 'success',
+            'data': {
+                'tickets': [t.to_dict() for t in tickets],
+                'pagination': {
+                    'page': page,
+                    'per_page': per_page,
+                    'total': total,
+                    'pages': (total + per_page - 1) // per_page
+                }
             }
-        }), 200
-        
-    except ValueError:
-        return jsonify({'error': 'Invalid pagination parameters'}), 400
-    except Exception as e:
-        current_app.logger.error(f"Error listing tickets: {e}")
-        return jsonify({'error': 'Failed to list tickets'}), 500
+        }
 
-@support_bp.route('/', methods=['POST'])
-@jwt_required()
-@require_customer
-@limiter.limit("5 per minute")
-def create_ticket():
-    """Create a new support ticket"""
-    try:
-        customer_id = get_jwt_identity()
-        
-        # Validate input
-        data = validate_json(request, TICKET_CREATE_SCHEMA)
-        
-        # Check customer exists
-        customer = Customer.query.get(customer_id)
-        if not customer:
-            return jsonify({'error': 'Customer not found'}), 404
-        
-        # Create ticket
-        ticket = SupportTicket(
-            customer_id=customer_id,
-            subject=data['subject'],
-            description=data['description'],
-            priority=data.get('priority', 'medium'),
-            category=data['category'],
-            status='open'
-        )
-        
-        db.session.add(ticket)
-        db.session.commit()
-        
-        # TODO: Send notification to support team
-        current_app.logger.info(f"Support ticket created: {ticket.id} for customer {customer_id}")
-        
-        return jsonify({
-            'id': ticket.id,
-            'subject': ticket.subject,
-            'description': ticket.description,
-            'status': ticket.status,
-            'priority': ticket.priority,
-            'category': ticket.category,
-            'created_at': ticket.created_at.isoformat(),
-            'updated_at': ticket.updated_at.isoformat()
-        }), 201
-        
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error creating ticket: {e}")
-        return jsonify({'error': 'Failed to create ticket'}), 500
+        session.close()
+        return jsonify(result), 200
 
-@support_bp.route('/<int:ticket_id>', methods=['GET'])
+    except Exception as e:
+        logger.error(f"List tickets error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to list tickets'}), 500
+
+
+@support_bp.route('/tickets/<ticket_id>', methods=['GET'])
 @jwt_required()
-@require_customer
-@limiter.limit("60 per minute")
 def get_ticket(ticket_id):
-    """Get a specific support ticket"""
+    """Get ticket details"""
     try:
-        customer_id = get_jwt_identity()
-        
-        # Find ticket
-        ticket = SupportTicket.query.filter_by(
-            id=ticket_id,
-            customer_id=customer_id
-        ).first()
-        
-        if not ticket:
-            return jsonify({'error': 'Ticket not found'}), 404
-        
-        return jsonify({
-            'id': ticket.id,
-            'subject': ticket.subject,
-            'description': ticket.description,
-            'status': ticket.status,
-            'priority': ticket.priority,
-            'category': ticket.category,
-            'created_at': ticket.created_at.isoformat() if ticket.created_at else None,
-            'updated_at': ticket.updated_at.isoformat() if ticket.updated_at else None,
-            'last_response_at': ticket.last_response_at.isoformat() if ticket.last_response_at else None,
-            'resolution': ticket.resolution,
-            'resolved_at': ticket.resolved_at.isoformat() if ticket.resolved_at else None
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error getting ticket: {e}")
-        return jsonify({'error': 'Failed to get ticket'}), 500
+        identity = get_jwt_identity()
+        session = get_session()
 
-@support_bp.route('/<int:ticket_id>', methods=['PUT'])
+        ticket = session.query(SupportTicket).filter(
+            SupportTicket.id == ticket_id,
+            SupportTicket.customer_id == identity
+        ).first()
+
+        if not ticket:
+            session.close()
+            return jsonify({'status': 'error', 'message': 'Ticket not found'}), 404
+
+        result = {
+            'status': 'success',
+            'data': ticket.to_dict()
+        }
+
+        session.close()
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Get ticket error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to get ticket'}), 500
+
+
+@support_bp.route('/tickets', methods=['POST'])
 @jwt_required()
-@require_customer
-@limiter.limit("10 per minute")
+def create_ticket():
+    """Create a support ticket"""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+    subject = data.get('subject', '').strip()
+    description = data.get('description', '').strip()
+    category = data.get('category', 'general')
+    priority = data.get('priority', TicketPriority.NORMAL.value)
+
+    # Validation
+    if not subject:
+        return jsonify({'status': 'error', 'message': 'Subject is required'}), 400
+
+    if not description:
+        return jsonify({'status': 'error', 'message': 'Description is required'}), 400
+
+    if len(subject) > 200:
+        return jsonify({'status': 'error', 'message': 'Subject too long (max 200 chars)'}), 400
+
+    valid_categories = ['billing', 'technical', 'general']
+    if category not in valid_categories:
+        category = 'general'
+
+    valid_priorities = [p.value for p in TicketPriority]
+    if priority not in valid_priorities:
+        priority = TicketPriority.NORMAL.value
+
+    try:
+        identity = get_jwt_identity()
+
+        with session_scope() as session:
+            ticket = SupportTicket(
+                customer_id=identity,
+                subject=subject,
+                description=description,
+                category=category,
+                priority=priority,
+                status=TicketStatus.OPEN.value,
+            )
+            session.add(ticket)
+            session.flush()
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Ticket created successfully',
+                'data': ticket.to_dict()
+            }), 201
+
+    except Exception as e:
+        logger.error(f"Create ticket error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to create ticket'}), 500
+
+
+@support_bp.route('/tickets/<ticket_id>', methods=['PUT'])
+@jwt_required()
 def update_ticket(ticket_id):
-    """Update a support ticket (add customer response)"""
-    try:
-        customer_id = get_jwt_identity()
-        
-        # Validate input
-        data = validate_json(request, TICKET_UPDATE_SCHEMA)
-        
-        # Find ticket
-        ticket = SupportTicket.query.filter_by(
-            id=ticket_id,
-            customer_id=customer_id
-        ).first()
-        
-        if not ticket:
-            return jsonify({'error': 'Ticket not found'}), 404
-        
-        # Check if ticket is closed
-        if ticket.status == 'closed':
-            return jsonify({'error': 'Cannot update closed ticket'}), 400
-        
-        # Add customer response (append to description)
-        separator = "\n\n--- Customer Response ---\n"
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        response = f"{separator}[{timestamp}] {data['description']}"
-        
-        ticket.description += response
-        ticket.updated_at = datetime.utcnow()
-        
-        # Reopen ticket if it was resolved
-        if ticket.status == 'resolved':
-            ticket.status = 'open'
-            ticket.resolved_at = None
-        
-        db.session.commit()
-        
-        current_app.logger.info(f"Support ticket updated: {ticket.id}")
-        
-        return jsonify({
-            'id': ticket.id,
-            'subject': ticket.subject,
-            'description': ticket.description,
-            'status': ticket.status,
-            'priority': ticket.priority,
-            'category': ticket.category,
-            'updated_at': ticket.updated_at.isoformat()
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error updating ticket: {e}")
-        return jsonify({'error': 'Failed to update ticket'}), 500
+    """Update ticket (add info)"""
+    data = request.get_json()
 
-@support_bp.route('/<int:ticket_id>/close', methods=['POST'])
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+    try:
+        identity = get_jwt_identity()
+
+        with session_scope() as session:
+            ticket = session.query(SupportTicket).filter(
+                SupportTicket.id == ticket_id,
+                SupportTicket.customer_id == identity
+            ).first()
+
+            if not ticket:
+                return jsonify({'status': 'error', 'message': 'Ticket not found'}), 404
+
+            if ticket.status == TicketStatus.CLOSED.value:
+                return jsonify({'status': 'error', 'message': 'Cannot update closed ticket'}), 400
+
+            # Update allowed fields
+            if 'description' in data:
+                # Append to description
+                new_info = data['description'].strip()
+                if new_info:
+                    ticket.description += f"\n\n--- Update ({datetime.utcnow().strftime('%Y-%m-%d %H:%M')}) ---\n{new_info}"
+
+            if 'priority' in data and data['priority'] in [p.value for p in TicketPriority]:
+                ticket.priority = data['priority']
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Ticket updated',
+                'data': ticket.to_dict()
+            }), 200
+
+    except Exception as e:
+        logger.error(f"Update ticket error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to update ticket'}), 500
+
+
+@support_bp.route('/tickets/<ticket_id>/close', methods=['POST'])
 @jwt_required()
-@require_customer
-@limiter.limit("10 per minute")
 def close_ticket(ticket_id):
-    """Close a support ticket"""
+    """Close a ticket"""
     try:
-        customer_id = get_jwt_identity()
-        
-        # Find ticket
-        ticket = SupportTicket.query.filter_by(
-            id=ticket_id,
-            customer_id=customer_id
-        ).first()
-        
-        if not ticket:
-            return jsonify({'error': 'Ticket not found'}), 404
-        
-        # Check if already closed
-        if ticket.status == 'closed':
-            return jsonify({'error': 'Ticket already closed'}), 400
-        
-        # Close ticket
-        ticket.status = 'closed'
-        ticket.resolved_at = datetime.utcnow()
-        ticket.updated_at = datetime.utcnow()
-        
-        db.session.commit()
-        
-        current_app.logger.info(f"Support ticket closed: {ticket.id}")
-        
-        return jsonify({
-            'id': ticket.id,
-            'status': ticket.status,
-            'resolved_at': ticket.resolved_at.isoformat(),
-            'message': 'Ticket closed successfully'
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error closing ticket: {e}")
-        return jsonify({'error': 'Failed to close ticket'}), 500
+        identity = get_jwt_identity()
 
-@support_bp.route('/stats', methods=['GET'])
-@jwt_required()
-@require_customer
-@limiter.limit("10 per minute")
-def get_stats():
-    """Get support ticket statistics for current customer"""
-    try:
-        customer_id = get_jwt_identity()
-        
-        # Get ticket counts by status
-        open_count = SupportTicket.query.filter_by(
-            customer_id=customer_id,
-            status='open'
-        ).count()
-        
-        in_progress_count = SupportTicket.query.filter_by(
-            customer_id=customer_id,
-            status='in_progress'
-        ).count()
-        
-        resolved_count = SupportTicket.query.filter_by(
-            customer_id=customer_id,
-            status='resolved'
-        ).count()
-        
-        closed_count = SupportTicket.query.filter_by(
-            customer_id=customer_id,
-            status='closed'
-        ).count()
-        
-        total_count = open_count + in_progress_count + resolved_count + closed_count
-        
-        # Get recent tickets (last 30 days)
-        from datetime import timedelta
-        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-        
-        recent_count = SupportTicket.query.filter(
-            SupportTicket.customer_id == customer_id,
-            SupportTicket.created_at >= thirty_days_ago
-        ).count()
-        
-        return jsonify({
-            'total': total_count,
-            'open': open_count,
-            'in_progress': in_progress_count,
-            'resolved': resolved_count,
-            'closed': closed_count,
-            'recent_30_days': recent_count
-        }), 200
-        
-    except Exception as e:
-        current_app.logger.error(f"Error getting ticket stats: {e}")
-        return jsonify({'error': 'Failed to get statistics'}), 500
+        with session_scope() as session:
+            ticket = session.query(SupportTicket).filter(
+                SupportTicket.id == ticket_id,
+                SupportTicket.customer_id == identity
+            ).first()
 
-# Health check
-@support_bp.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
+            if not ticket:
+                return jsonify({'status': 'error', 'message': 'Ticket not found'}), 404
+
+            if ticket.status == TicketStatus.CLOSED.value:
+                return jsonify({'status': 'error', 'message': 'Ticket already closed'}), 400
+
+            ticket.status = TicketStatus.CLOSED.value
+            ticket.resolved_at = datetime.utcnow()
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Ticket closed',
+                'data': ticket.to_dict()
+            }), 200
+
+    except Exception as e:
+        logger.error(f"Close ticket error: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to close ticket'}), 500
+
+
+@support_bp.route('/faq', methods=['GET'])
+def get_faq():
+    """Get FAQ articles (public endpoint)"""
+    faq_items = [
+        {
+            'id': 1,
+            'category': 'general',
+            'question': 'How do I create a new tenant?',
+            'answer': 'Go to your dashboard, click "Create Tenant", enter a unique slug and name, then click Create. Your tenant will be provisioned automatically.'
+        },
+        {
+            'id': 2,
+            'category': 'billing',
+            'question': 'How does the free trial work?',
+            'answer': 'All plans include a 14-day free trial. You can use all features during the trial period. No credit card required to start.'
+        },
+        {
+            'id': 3,
+            'category': 'technical',
+            'question': 'How do I access my Odoo instance?',
+            'answer': 'After your tenant is created, you can access it at your-slug.yourdomain.com. Use the credentials sent to your email.'
+        },
+        {
+            'id': 4,
+            'category': 'billing',
+            'question': 'Can I upgrade or downgrade my plan?',
+            'answer': 'Yes, you can change your plan at any time from the Billing section. Changes take effect immediately.'
+        },
+        {
+            'id': 5,
+            'category': 'technical',
+            'question': 'How do backups work?',
+            'answer': 'Automatic backups run daily. You can also create manual backups from your tenant dashboard. Backups are retained for 30 days.'
+        },
+        {
+            'id': 6,
+            'category': 'general',
+            'question': 'How do I contact support?',
+            'answer': 'Create a support ticket from your dashboard, or email support@example.com. Response times vary by plan.'
+        },
+    ]
+
+    category = request.args.get('category')
+    if category:
+        faq_items = [f for f in faq_items if f['category'] == category]
+
     return jsonify({
-        'status': 'healthy',
-        'service': 'support',
-        'timestamp': datetime.utcnow().isoformat()
+        'status': 'success',
+        'data': {
+            'items': faq_items
+        }
     }), 200
