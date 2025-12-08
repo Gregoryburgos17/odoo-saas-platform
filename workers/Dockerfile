@@ -1,7 +1,7 @@
 # Workers Dockerfile
 # Optimized for Podman on Windows
 
-FROM python:3.11-slim
+FROM docker.io/library/python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -10,37 +10,36 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Create app user and directory
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser \
-    && mkdir -p /app /tmp/backups \
-    && chown -R appuser:appgroup /app /tmp/backups
-
 WORKDIR /app
 
-# Install system dependencies including PostgreSQL client
+# Install system dependencies including PostgreSQL client for backups
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy requirements first for caching
-COPY requirements.txt .
+# Create backup directory
+RUN mkdir -p /tmp/backups
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy and install requirements
+COPY workers/requirements.txt /app/workers/requirements.txt
+RUN pip install --no-cache-dir -r /app/workers/requirements.txt
 
-# Copy shared module
-COPY --chown=appuser:appgroup ../shared /app/shared/
+# Copy shared module first
+COPY shared /app/shared/
 
-# Copy application code
-COPY --chown=appuser:appgroup . /app/workers/
+# Copy workers application
+COPY workers /app/workers/
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app /tmp/backups
+USER appuser
 
 # Set working directory to workers
 WORKDIR /app/workers
-
-# Switch to non-root user
-USER appuser
 
 # Run the worker
 CMD ["python", "run.py"]

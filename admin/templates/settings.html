@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Settings</h2>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">System Information</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr>
+                        <td class="text-muted">Version</td>
+                        <td>1.0.0</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Environment</td>
+                        <td><span class="badge bg-warning">Development</span></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Database</td>
+                        <td id="db-status">Checking...</td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Redis</td>
+                        <td id="redis-status">Checking...</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/api/dashboard/stats" target="_blank" class="btn btn-outline-primary">
+                        <i class="bi bi-graph-up"></i> View API Stats
+                    </a>
+                    <a href="http://localhost:9181" target="_blank" class="btn btn-outline-secondary">
+                        <i class="bi bi-diagram-3"></i> RQ Dashboard
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Documentation</h5>
+            </div>
+            <div class="card-body">
+                <h6>API Endpoints</h6>
+                <ul class="small">
+                    <li><code>POST /api/auth/login</code> - Login</li>
+                    <li><code>GET /api/tenants</code> - List tenants</li>
+                    <li><code>GET /api/customers</code> - List customers</li>
+                    <li><code>GET /api/plans</code> - List plans</li>
+                    <li><code>GET /api/dashboard/stats</code> - Dashboard stats</li>
+                </ul>
+                <h6>Default Credentials</h6>
+                <p class="small text-muted mb-0">
+                    Admin: admin@example.com / admin123<br>
+                    Demo: demo@example.com / demo123
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function checkHealth() {
+        try {
+            const response = await fetch('/health/ready');
+            const data = await response.json();
+
+            document.getElementById('db-status').innerHTML = data.checks.database
+                ? '<span class="badge bg-success">Connected</span>'
+                : '<span class="badge bg-danger">Disconnected</span>';
+
+            document.getElementById('redis-status').innerHTML = data.checks.redis
+                ? '<span class="badge bg-success">Connected</span>'
+                : '<span class="badge bg-danger">Disconnected</span>';
+        } catch (e) {
+            document.getElementById('db-status').innerHTML = '<span class="badge bg-danger">Error</span>';
+            document.getElementById('redis-status').innerHTML = '<span class="badge bg-danger">Error</span>';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', checkHealth);
+</script>
+{% endblock %}

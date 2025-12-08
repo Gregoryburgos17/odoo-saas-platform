@@ -1,7 +1,7 @@
 # Customer Portal Dockerfile
 # Optimized for Podman on Windows
 
-FROM python:3.11-slim
+FROM docker.io/library/python:3.11-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -10,11 +10,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Create app user and directory
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser \
-    && mkdir -p /app \
-    && chown -R appuser:appgroup /app
-
 WORKDIR /app
 
 # Install system dependencies
@@ -22,31 +17,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy requirements first for caching
-COPY requirements.txt .
+# Copy and install requirements
+COPY portal/requirements.txt /app/portal/requirements.txt
+RUN pip install --no-cache-dir -r /app/portal/requirements.txt
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy shared module first
+COPY shared /app/shared/
 
-# Copy shared module
-COPY --chown=appuser:appgroup ../shared /app/shared/
+# Copy portal application
+COPY portal /app/portal/
 
-# Copy application code
-COPY --chown=appuser:appgroup . /app/portal/
+# Copy scripts
+COPY scripts /app/scripts/
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
 # Set working directory to portal
 WORKDIR /app/portal
-
-# Switch to non-root user
-USER appuser
 
 # Expose port
 EXPOSE 5001
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:5001/health || exit 1
 
 # Run the application

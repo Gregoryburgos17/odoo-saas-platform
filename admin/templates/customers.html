@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Customers{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Customers</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createCustomerModal">
+        <i class="bi bi-plus-lg"></i> Add Customer
+    </button>
+</div>
+
+<!-- Search -->
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <input type="text" class="form-control" id="search" placeholder="Search by email, name, or company...">
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-outline-secondary w-100" onclick="loadCustomers()">
+                    <i class="bi bi-search"></i> Search
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Customers Table -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Customer</th>
+                        <th>Company</th>
+                        <th>Role</th>
+                        <th>Tenants</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="customers-tbody">
+                    <tr>
+                        <td colspan="6" class="text-center text-muted">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Create Customer Modal -->
+<div class="modal fade" id="createCustomerModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Customer</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="create-customer-form">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">First Name</label>
+                            <input type="text" class="form-control" id="first-name">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Last Name</label>
+                            <input type="text" class="form-control" id="last-name">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" id="email" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" id="password" required minlength="8">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Company</label>
+                        <input type="text" class="form-control" id="company">
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Max Tenants</label>
+                            <input type="number" class="form-control" id="max-tenants" value="5">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Max Quota (GB)</label>
+                            <input type="number" class="form-control" id="max-quota" value="50">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="createCustomer()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function loadCustomers() {
+        const search = document.getElementById('search').value;
+        let url = '/api/customers?per_page=50';
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+
+        const data = await apiCall(url);
+        const tbody = document.getElementById('customers-tbody');
+
+        if (data.status === 'success') {
+            const customers = data.data.customers;
+            if (customers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No customers found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = customers.map(c => `
+                <tr>
+                    <td>
+                        <strong>${c.full_name}</strong><br>
+                        <small class="text-muted">${c.email}</small>
+                    </td>
+                    <td>${c.company || '-'}</td>
+                    <td><span class="badge bg-secondary">${c.role}</span></td>
+                    <td>${c.tenant_count || 0} / ${c.max_tenants}</td>
+                    <td>
+                        ${c.is_active
+                            ? '<span class="badge bg-success">Active</span>'
+                            : '<span class="badge bg-danger">Inactive</span>'}
+                    </td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-primary" onclick="editCustomer('${c.id}')">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-outline-danger" onclick="deleteCustomer('${c.id}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+    }
+
+    async function createCustomer() {
+        const data = {
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value,
+            first_name: document.getElementById('first-name').value,
+            last_name: document.getElementById('last-name').value,
+            company: document.getElementById('company').value,
+            max_tenants: parseInt(document.getElementById('max-tenants').value),
+            max_quota_gb: parseInt(document.getElementById('max-quota').value),
+        };
+
+        const response = await apiCall('/api/customers', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+
+        if (response.status === 'success') {
+            bootstrap.Modal.getInstance(document.getElementById('createCustomerModal')).hide();
+            loadCustomers();
+            alert('Customer created successfully');
+        } else {
+            alert(response.message || 'Failed to create customer');
+        }
+    }
+
+    async function deleteCustomer(id) {
+        if (!confirm('Deactivate this customer?')) return;
+        const response = await apiCall(`/api/customers/${id}`, { method: 'DELETE' });
+        if (response.status === 'success') loadCustomers();
+        else alert(response.message);
+    }
+
+    function editCustomer(id) {
+        // TODO: Implement edit modal
+        alert('Edit functionality coming soon');
+    }
+
+    document.addEventListener('DOMContentLoaded', loadCustomers);
+</script>
+{% endblock %}

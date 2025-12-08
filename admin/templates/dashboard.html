@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Dashboard</h2>
+    <button class="btn btn-primary" onclick="refreshStats()">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+    </button>
+</div>
+
+<!-- Stats Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card card-stat h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="text-muted mb-2">Total Customers</h6>
+                        <h2 class="mb-0" id="stat-customers">-</h2>
+                    </div>
+                    <div class="bg-primary bg-opacity-10 rounded-circle p-3">
+                        <i class="bi bi-people text-primary fs-4"></i>
+                    </div>
+                </div>
+                <small class="text-success" id="stat-customers-new">+0 this week</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stat h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="text-muted mb-2">Active Tenants</h6>
+                        <h2 class="mb-0" id="stat-tenants">-</h2>
+                    </div>
+                    <div class="bg-success bg-opacity-10 rounded-circle p-3">
+                        <i class="bi bi-building text-success fs-4"></i>
+                    </div>
+                </div>
+                <small class="text-success" id="stat-tenants-new">+0 this week</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stat h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="text-muted mb-2">Monthly Revenue</h6>
+                        <h2 class="mb-0" id="stat-mrr">$0</h2>
+                    </div>
+                    <div class="bg-warning bg-opacity-10 rounded-circle p-3">
+                        <i class="bi bi-currency-dollar text-warning fs-4"></i>
+                    </div>
+                </div>
+                <small class="text-muted" id="stat-arr">ARR: $0</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card card-stat h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="text-muted mb-2">Storage Used</h6>
+                        <h2 class="mb-0" id="stat-storage">0 GB</h2>
+                    </div>
+                    <div class="bg-info bg-opacity-10 rounded-circle p-3">
+                        <i class="bi bi-hdd text-info fs-4"></i>
+                    </div>
+                </div>
+                <small class="text-muted" id="stat-users">0 total users</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tenants by State -->
+<div class="row g-4 mb-4">
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Tenant Status Overview</h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center" id="tenant-states">
+                    <div class="col">
+                        <span class="badge bg-success fs-6 mb-2">0</span>
+                        <p class="text-muted small mb-0">Active</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-warning fs-6 mb-2">0</span>
+                        <p class="text-muted small mb-0">Creating</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-secondary fs-6 mb-2">0</span>
+                        <p class="text-muted small mb-0">Suspended</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-danger fs-6 mb-2">0</span>
+                        <p class="text-muted small mb-0">Error</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header bg-white">
+                <h5 class="mb-0">Subscriptions</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Active</span>
+                    <span class="badge bg-success" id="sub-active">0</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>Trialing</span>
+                    <span class="badge bg-info" id="sub-trial">0</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span>Total</span>
+                    <span class="badge bg-secondary" id="sub-total">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="card">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Recent Activity</h5>
+        <a href="/audit" class="btn btn-sm btn-outline-primary">View All</a>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="activity-table">
+                <thead>
+                    <tr>
+                        <th>Action</th>
+                        <th>User</th>
+                        <th>Resource</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td colspan="4" class="text-center text-muted">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function loadStats() {
+        try {
+            const data = await apiCall('/api/dashboard/stats');
+            if (data.status === 'success') {
+                const stats = data.data;
+
+                // Customers
+                document.getElementById('stat-customers').textContent = stats.customers.total;
+                document.getElementById('stat-customers-new').textContent = `+${stats.customers.new_7d} this week`;
+
+                // Tenants
+                document.getElementById('stat-tenants').textContent = stats.tenants.active;
+                document.getElementById('stat-tenants-new').textContent = `+${stats.tenants.new_7d} this week`;
+
+                // Revenue
+                document.getElementById('stat-mrr').textContent = `$${stats.revenue.mrr.toLocaleString()}`;
+                document.getElementById('stat-arr').textContent = `ARR: $${stats.revenue.arr.toLocaleString()}`;
+
+                // Storage
+                document.getElementById('stat-storage').textContent = `${stats.resources.total_storage_gb} GB`;
+                document.getElementById('stat-users').textContent = `${stats.resources.total_users} total users`;
+
+                // Tenant states
+                const states = stats.tenants.by_state;
+                document.getElementById('tenant-states').innerHTML = `
+                    <div class="col">
+                        <span class="badge bg-success fs-6 mb-2">${states.active || 0}</span>
+                        <p class="text-muted small mb-0">Active</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-warning fs-6 mb-2">${states.creating || 0}</span>
+                        <p class="text-muted small mb-0">Creating</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-secondary fs-6 mb-2">${states.suspended || 0}</span>
+                        <p class="text-muted small mb-0">Suspended</p>
+                    </div>
+                    <div class="col">
+                        <span class="badge bg-danger fs-6 mb-2">${states.error || 0}</span>
+                        <p class="text-muted small mb-0">Error</p>
+                    </div>
+                `;
+
+                // Subscriptions
+                document.getElementById('sub-active').textContent = stats.subscriptions.active;
+                document.getElementById('sub-trial').textContent = stats.subscriptions.trialing;
+                document.getElementById('sub-total').textContent = stats.subscriptions.total;
+            }
+        } catch (error) {
+            console.error('Failed to load stats:', error);
+        }
+    }
+
+    async function loadActivity() {
+        try {
+            const data = await apiCall('/api/dashboard/recent-activity?limit=10');
+            if (data.status === 'success') {
+                const tbody = document.querySelector('#activity-table tbody');
+                if (data.data.activities.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No recent activity</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.data.activities.map(activity => {
+                    const actionBadge = {
+                        'create': 'bg-success',
+                        'update': 'bg-info',
+                        'delete': 'bg-danger',
+                        'login': 'bg-primary',
+                        'logout': 'bg-secondary'
+                    }[activity.action] || 'bg-secondary';
+
+                    const time = new Date(activity.created_at).toLocaleString();
+
+                    return `
+                        <tr>
+                            <td><span class="badge ${actionBadge}">${activity.action}</span></td>
+                            <td>${activity.actor_email || 'System'}</td>
+                            <td>${activity.resource_type} ${activity.resource_id ? '#' + activity.resource_id.substring(0, 8) : ''}</td>
+                            <td><small class="text-muted">${time}</small></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        } catch (error) {
+            console.error('Failed to load activity:', error);
+        }
+    }
+
+    function refreshStats() {
+        loadStats();
+        loadActivity();
+    }
+
+    // Load on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        loadStats();
+        loadActivity();
+    });
+</script>
+{% endblock %}

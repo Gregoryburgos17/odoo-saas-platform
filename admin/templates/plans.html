@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+
+{% block title %}Plans{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Subscription Plans</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createPlanModal">
+        <i class="bi bi-plus-lg"></i> Add Plan
+    </button>
+</div>
+
+<!-- Plans Grid -->
+<div class="row g-4" id="plans-container">
+    <div class="col-12 text-center text-muted">Loading...</div>
+</div>
+
+<!-- Create Plan Modal -->
+<div class="modal fade" id="createPlanModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Plan</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="create-plan-form">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Name</label>
+                            <input type="text" class="form-control" id="plan-name" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Slug</label>
+                            <input type="text" class="form-control" id="plan-slug" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="plan-description" rows="2"></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Monthly Price ($)</label>
+                            <input type="number" class="form-control" id="plan-price-monthly" step="0.01" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Yearly Price ($)</label>
+                            <input type="number" class="form-control" id="plan-price-yearly" step="0.01">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Max Tenants</label>
+                            <input type="number" class="form-control" id="plan-max-tenants" value="1">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Max Users</label>
+                            <input type="number" class="form-control" id="plan-max-users" value="5">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">DB Size (GB)</label>
+                            <input type="number" class="form-control" id="plan-db-size" value="1">
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label">Storage (GB)</label>
+                            <input type="number" class="form-control" id="plan-storage" value="5">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Trial Days</label>
+                        <input type="number" class="form-control" id="plan-trial-days" value="14">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="createPlan()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function loadPlans() {
+        const data = await apiCall('/api/plans?include_inactive=true');
+        const container = document.getElementById('plans-container');
+
+        if (data.status === 'success') {
+            const plans = data.data.plans;
+            if (plans.length === 0) {
+                container.innerHTML = '<div class="col-12 text-center text-muted">No plans found</div>';
+                return;
+            }
+
+            container.innerHTML = plans.map(p => `
+                <div class="col-md-4">
+                    <div class="card h-100 ${!p.is_active ? 'border-secondary opacity-50' : ''}">
+                        <div class="card-header bg-white">
+                            <h5 class="mb-0">${p.name}</h5>
+                            ${!p.is_active ? '<span class="badge bg-secondary">Inactive</span>' : ''}
+                        </div>
+                        <div class="card-body">
+                            <h3 class="text-primary">$${p.price_monthly}<small class="text-muted fs-6">/mo</small></h3>
+                            ${p.price_yearly ? `<p class="text-muted">$${p.price_yearly}/year</p>` : ''}
+                            <p>${p.description || ''}</p>
+                            <hr>
+                            <ul class="list-unstyled">
+                                <li><i class="bi bi-check text-success"></i> ${p.max_tenants} tenant(s)</li>
+                                <li><i class="bi bi-check text-success"></i> ${p.max_users_per_tenant} users/tenant</li>
+                                <li><i class="bi bi-check text-success"></i> ${p.max_db_size_gb} GB database</li>
+                                <li><i class="bi bi-check text-success"></i> ${p.max_filestore_gb} GB storage</li>
+                                <li><i class="bi bi-check text-success"></i> ${p.trial_days} day trial</li>
+                            </ul>
+                        </div>
+                        <div class="card-footer bg-white">
+                            <div class="btn-group w-100">
+                                <button class="btn btn-outline-primary" onclick="editPlan('${p.id}')">
+                                    <i class="bi bi-pencil"></i> Edit
+                                </button>
+                                <button class="btn btn-outline-danger" onclick="deletePlan('${p.id}')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    }
+
+    async function createPlan() {
+        const data = {
+            name: document.getElementById('plan-name').value,
+            slug: document.getElementById('plan-slug').value,
+            description: document.getElementById('plan-description').value,
+            price_monthly: parseFloat(document.getElementById('plan-price-monthly').value),
+            price_yearly: parseFloat(document.getElementById('plan-price-yearly').value) || null,
+            max_tenants: parseInt(document.getElementById('plan-max-tenants').value),
+            max_users_per_tenant: parseInt(document.getElementById('plan-max-users').value),
+            max_db_size_gb: parseInt(document.getElementById('plan-db-size').value),
+            max_filestore_gb: parseInt(document.getElementById('plan-storage').value),
+            trial_days: parseInt(document.getElementById('plan-trial-days').value),
+        };
+
+        const response = await apiCall('/api/plans', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+
+        if (response.status === 'success') {
+            bootstrap.Modal.getInstance(document.getElementById('createPlanModal')).hide();
+            loadPlans();
+        } else {
+            alert(response.message || 'Failed to create plan');
+        }
+    }
+
+    async function deletePlan(id) {
+        if (!confirm('Deactivate this plan?')) return;
+        const response = await apiCall(`/api/plans/${id}`, { method: 'DELETE' });
+        if (response.status === 'success') loadPlans();
+        else alert(response.message);
+    }
+
+    function editPlan(id) {
+        alert('Edit functionality coming soon');
+    }
+
+    document.addEventListener('DOMContentLoaded', loadPlans);
+</script>
+{% endblock %}

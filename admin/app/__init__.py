@@ -159,13 +159,18 @@ def init_extensions(app: Flask):
 def register_blueprints(app: Flask):
     """Register all blueprints"""
     from .api import auth_bp, health_bp, tenants_bp, customers_bp, plans_bp, dashboard_bp
+    from .web import web_bp
 
+    # API blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(health_bp, url_prefix='/health')
     app.register_blueprint(tenants_bp, url_prefix='/api/tenants')
     app.register_blueprint(customers_bp, url_prefix='/api/customers')
     app.register_blueprint(plans_bp, url_prefix='/api/plans')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
+
+    # Web UI blueprint
+    app.register_blueprint(web_bp)
 
 
 def register_error_handlers(app: Flask):
