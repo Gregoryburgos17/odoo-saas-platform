@@ -1,0 +1,280 @@
+# =============================================================================
+# Odoo SaaS Platform - Podman para Windows (Desarrollo Local)
+# =============================================================================
+# Este archivo está optimizado para ejecutar la plataforma localmente
+# con Podman Desktop en Windows
+#
+# Uso:
+#   podman-compose -f podman-compose.windows.yml up -d
+#   podman-compose -f podman-compose.windows.yml down
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # BASE DE DATOS POSTGRESQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: docker.io/library/postgres:15-alpine
+    container_name: odoo-saas-postgres
+    environment:
+      POSTGRES_DB: ${PG_DATABASE:-odoo_saas_platform}
+      POSTGRES_USER: ${PG_USER:-odoo}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-odoo_dev_2024}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=en_US.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - odoo-saas-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-odoo} -d ${PG_DATABASE:-odoo_saas_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # REDIS - Cache y Cola de Trabajos
+  # ---------------------------------------------------------------------------
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: odoo-saas-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - odoo-saas-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # ADMIN DASHBOARD - Panel de Administracion
+  # ---------------------------------------------------------------------------
+  admin:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    image: localhost/odoo-saas-admin:latest
+    container_name: odoo-saas-admin
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_dev_2024}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production-12345}
+      - JWT_ACCESS_TOKEN_EXPIRES=3600
+      - JWT_REFRESH_TOKEN_EXPIRES=604800
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5000,http://localhost:5001,http://localhost:8085
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./admin:/app/admin:ro
+      - ./shared:/app/shared:ro
+    ports:
+      - "5000:5000"
+    networks:
+      - odoo-saas-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # PORTAL - Portal del Cliente
+  # ---------------------------------------------------------------------------
+  portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    image: localhost/odoo-saas-portal:latest
+    container_name: odoo-saas-portal
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_dev_2024}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production-12345}
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5000,http://localhost:5001,http://localhost:8085
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./portal:/app/portal:ro
+      - ./shared:/app/shared:ro
+    ports:
+      - "5001:5001"
+    networks:
+      - odoo-saas-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # WORKER - Procesamiento de Trabajos en Segundo Plano
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    image: localhost/odoo-saas-worker:latest
+    container_name: odoo-saas-worker
+    environment:
+      - FLASK_ENV=development
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER:-odoo}
+      - PG_PASSWORD=${PG_PASSWORD:-odoo_dev_2024}
+      - PG_DATABASE=${PG_DATABASE:-odoo_saas_platform}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production-12345}
+      - LOG_LEVEL=DEBUG
+      - RQ_WORKERS=2
+    volumes:
+      - ./workers:/app:ro
+      - ./shared:/app/shared:ro
+    networks:
+      - odoo-saas-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # RQ DASHBOARD - Monitor de Colas de Trabajo
+  # ---------------------------------------------------------------------------
+  rq-dashboard:
+    image: docker.io/eoranged/rq-dashboard:latest
+    container_name: odoo-saas-rq-dashboard
+    environment:
+      - RQ_DASHBOARD_REDIS_URL=redis://redis:6379/0
+    ports:
+      - "9181:9181"
+    networks:
+      - odoo-saas-net
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # ADMINER - Administrador de Base de Datos (UI Web)
+  # ---------------------------------------------------------------------------
+  adminer:
+    image: docker.io/library/adminer:latest
+    container_name: odoo-saas-adminer
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=nette
+    ports:
+      - "8085:8080"
+    networks:
+      - odoo-saas-net
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # PROMETHEUS - Metricas (Opcional para desarrollo)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: docker.io/prom/prometheus:latest
+    container_name: odoo-saas-prometheus
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - odoo-saas-net
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=24h'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # ---------------------------------------------------------------------------
+  # GRAFANA - Visualizacion de Metricas (Opcional)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    container_name: odoo-saas-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - odoo-saas-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+# =============================================================================
+# VOLUMENES PERSISTENTES
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# =============================================================================
+# RED
+# =============================================================================
+networks:
+  odoo-saas-net:
+    driver: bridge
+    name: odoo-saas-net
